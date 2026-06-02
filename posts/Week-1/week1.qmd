@@ -1,0 +1,258 @@
+---
+title: "Week 1: Getting Hands-On with MPI and PETSc"
+author: "Chinmay Tangal"
+date: "2026-06-07"
+page-layout: article
+categories: [GSoC 2026, Week 1, QuTiP, PETSc, MPI]
+---
+
+Coding phase has started. Week 1 was less about writing solver code and more about actually getting comfortable with the tools I'll be using — MPI and PETSc. Worked through a set of exercises, each one building on the last.
+
+## Starting with MPI
+
+Started with the basics — splitting work across processes, each rank handles its chunk, gather results back to rank 0.
+
+```python
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD 
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+chunk = 100 // size  
+start = rank * chunk + 1   
+end   = start + chunk
+
+local_results = [(n, n * n) for n in range(start, end)] 
+
+print(f"Rank {rank}: computed {start}² to {end-1}²")
+
+all_results = comm.gather(local_results, root=0)
+
+if rank == 0:
+    flat = [item for sublist in all_results for item in sublist]
+    print(f"\nRank 0 has all {len(flat)} results")
+    for n, sq in flat[:5]:
+        print(f"  {n}² = {sq}")
+    print("  ...")
+```
+
+Simple, but it made the mental model concrete.
+
+## PETSc Distributed Vectors
+
+Next step was PETSc. Created a distributed vector, filled it with values, verified each rank owned the right slice.
+
+```python
+import sys
+from mpi4py import MPI
+import petsc4py
+petsc4py.init(sys.argv)
+from petsc4py import PETSc
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+x = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+x.setSizes(100)
+x.setFromOptions()
+x.setUp()
+
+lo, hi = x.getOwnershipRange()
+
+for i in range(lo, hi):
+    x.setValue(i, (i + 1) ** 2)
+
+x.assemblyBegin()
+x.assemblyEnd()
+
+vals = x.getValues(range(lo, hi))
+print(f"Rank {rank} owns indices {lo}–{hi-1}, first={int(vals[0])}, last={int(vals[-1])}")
+
+total = x.sum()
+if rank == 0:
+    print(f"\nSum of all squares = {int(total)}")
+    print(f"Expected           = {sum(i*i for i in range(1,101))}")
+
+x.destroy()
+```
+
+`getOwnershipRange()` is the pattern I'll be using constantly — each rank knows which slice of the global data it owns.
+
+## Distributed Matrix-Vector Multiplication
+
+Built a tridiagonal matrix distributed across ranks and multiplied it by a distributed vector. This is roughly the shape of what the HEOM RHS computation will look like.
+
+```python
+import sys
+from mpi4py import MPI
+import petsc4py
+petsc4py.init(sys.argv)
+from petsc4py import PETSc
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+global_size = 100
+
+x = PETSc.Vec().create(comm=comm)
+x.setSizes(global_size)
+x.setFromOptions()
+x.setUp()
+
+v_lo, v_hi = x.getOwnershipRange()
+for i in range(v_lo, v_hi):
+    x.setValue(i, float(i))
+x.assemblyBegin()
+x.assemblyEnd()
+
+A = PETSc.Mat().create(comm=comm)
+A.setSizes([global_size, global_size])
+A.setType('aij')
+A.setFromOptions()
+A.setUp()
+
+m_lo, m_hi = A.getOwnershipRange()
+for i in range(m_lo, m_hi):
+    if i > 0:
+        A.setValue(i, i - 1, -1.0)
+    A.setValue(i, i, 2.0)
+    if i < global_size - 1:
+        A.setValue(i, i + 1, -1.0)
+
+A.assemblyBegin()
+A.assemblyEnd()
+
+y = PETSc.Vec().create(comm=comm)
+y.setSizes(global_size)
+y.setFromOptions()
+y.setUp()
+
+A.mult(x, y)
+
+y_lo, y_hi = y.getOwnershipRange()
+local_vals = y.getValues(range(y_lo, y_hi))
+print(f"Rank {rank} checked indices {y_lo} to {y_hi-1}.")
+print(f"  -> Index {y_lo} value: {local_vals[0]}")
+print(f"  -> Index {y_hi-1} value: {local_vals[-1]}")
+
+x.destroy()
+y.destroy()
+A.destroy()
+```
+
+The assembly step is where MPI communication happens across rank boundaries — PETSc handles that internally.
+
+## Multi-Index Mapping (The HEOM Layout)
+
+This one was directly relevant to the project. In HEOM, auxiliary density matrices are labeled by multi-indices — `(0,0)`, `(1,0)`, `(0,1)`, etc. PETSc only understands flat linear indices, so I needed a mapping function that converts hierarchy coordinates into a 1D index.
+
+```python
+import sys
+from mpi4py import MPI
+import petsc4py
+petsc4py.init(sys.argv)
+from petsc4py import PETSc
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+GRID_DIM = 5
+global_size = GRID_DIM * GRID_DIM
+
+def get_flat_index(n1, n2):
+    return n1 * GRID_DIM + n2
+
+x = PETSc.Vec().create(comm=comm)
+x.setSizes(global_size)
+x.setFromOptions()
+x.setUp()
+
+lo, hi = x.getOwnershipRange()
+
+for n1 in range(GRID_DIM):
+    for n2 in range(GRID_DIM):
+        flat_idx = get_flat_index(n1, n2)
+        if lo <= flat_idx < hi:
+            physics_value = float(n1 * 10 + n2)
+            x.setValue(flat_idx, physics_value)
+
+x.assemblyBegin()
+x.assemblyEnd()
+
+target_idx = get_flat_index(3, 2)
+if lo <= target_idx < hi:
+    val = x.getValues([target_idx])[0]
+    print(f"Rank {rank} owns flat index {target_idx} (grid (3,2)). Value: {val}")
+
+x.destroy()
+```
+
+This mapping is going to be central to the actual implementation.
+
+## ODE Integration with PETSc TS
+
+Last exercise — hooking up PETSc's time-stepper (TS) to actually solve an ODE in parallel. Used a simple decay system `dx/dt = -0.5x` so I could verify the output analytically.
+
+```python
+import sys
+from mpi4py import MPI
+import petsc4py
+petsc4py.init(sys.argv)
+from petsc4py import PETSc
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+global_size = 10
+
+A = PETSc.Mat().create(comm=comm)
+A.setSizes([global_size, global_size])
+A.setType('aij')
+A.setUp()
+
+m_lo, m_hi = A.getOwnershipRange()
+for i in range(m_lo, m_hi):
+    A.setValue(i, i, -0.5)
+A.assemblyBegin()
+A.assemblyEnd()
+
+x = PETSc.Vec().create(comm=comm)
+x.setSizes(global_size)
+x.setUp()
+v_lo, v_hi = x.getOwnershipRange()
+for i in range(v_lo, v_hi):
+    x.setValue(i, 10.0)
+x.assemblyBegin()
+x.assemblyEnd()
+
+def rhs_function(ts, t, vec_x, vec_f):
+    A.mult(vec_x, vec_f)
+
+ts = PETSc.TS().create(comm=comm)
+ts.setProblemType(ts.ProblemType.LINEAR)
+ts.setRHSFunction(rhs_function)
+ts.setType('rk')
+ts.setTime(0.0)
+ts.setMaxTime(2.0)
+ts.setTimeStep(0.1)
+ts.setFromOptions()
+
+ts.solve(x)
+
+v_lo, v_hi = x.getOwnershipRange()
+local_vals = x.getValues(range(v_lo, v_hi))
+if rank == 0:
+    print(f"Initial value was 10.0. After evolving to t=2.0, index 0 value is: {local_vals[0]:.4f}")
+    # Analytical: 10 * e^(-0.5 * 2) ≈ 3.6788
+
+x.destroy()
+A.destroy()
+ts.destroy()
+```
+
+This is the pattern the distributed HEOM solver will follow — define a distributed RHS function, hand it to PETSc TS, let it integrate. Good to have a working toy version before dealing with the actual hierarchy.
+
+---
+
+*Next up: Profiling the existing HEOM solver to understand where it breaks down.*

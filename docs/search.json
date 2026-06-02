@@ -1,0 +1,212 @@
+[
+  {
+    "objectID": "project.html",
+    "href": "project.html",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "",
+    "text": "Student: Chinmay Tangal Organization: QuTiP - Quantum Toolbox in Python, NumFOCUS\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nProject Duration: May 2026 - August 2026"
+  },
+  {
+    "objectID": "project.html#project-overview",
+    "href": "project.html#project-overview",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "Project Overview",
+    "text": "Project Overview\n\nThe Problem\nHEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. It does this by propagating an entire hierarchy of coupled auxiliary density matrices simultaneously, which is what makes it exact and also what makes it expensive. Memory and compute blow up fast as hierarchy depth or system size grows.\nThe current QuTiP implementation runs on a single node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that’s fine. Push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff with no workaround — it’s a structural limitation.\n\n\nWhat This Project Builds\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster. The existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n\n\nKey Goals\n\nDistributed data layout for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local\nPETSc TS integration for distributed ODE integration across ranks\nCorrectness first — the distributed path must produce identical results to the existing solver before any performance work\nBenchmarks across hierarchy depths, system sizes, and node counts\nHPC documentation for running the solver on real cluster infrastructure"
+  },
+  {
+    "objectID": "project.html#project-timeline",
+    "href": "project.html#project-timeline",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "Project Timeline",
+    "text": "Project Timeline\n\nCommunity Bonding (May 12 – May 24)\n\nAligned with mentors on tech stack: PETSc and MPI\nSet up local development environment with PETSc and MPI\nGot familiar with PETSc distributed vectors, matrices, and TS interface\n\n\n\nCoding Phase 1 (May 25 – July 5)\nWeek 1–2: Profile the existing HEOM solver on benchmark systems at different hierarchy depths and system sizes. Document bottlenecks in a reproducible format.\nWeek 3–4: Implement PETSc-based distributed vectors and matrices for the HEOM hierarchy. Handle distribution of coupled density matrices across MPI ranks.\nWeek 5–6: Connect distributed data structures to PETSc’s ODE/TS solver. Run small benchmark systems through both solver paths and validate correctness.\n\n\nMidterm Evaluation (July 6 – July 10)\nDeliverables: working distributed HEOM ODE solver via PETSc, correctness validated against existing solver, baseline profiling results documented.\n\n\nCoding Phase 2 (July 6 – August 16)\nWeek 7–8: Scale testing at larger hierarchy depths and node counts. Debug MPI-related issues — load imbalance, communication overhead, memory usage across ranks.\nWeek 9–10: Benchmark distributed solver across different node counts and hierarchy sizes. Optimize remaining bottlenecks.\nWeek 11–12: Write documentation and HPC tutorials. Finalize test suite. Clean up code from mentor review.\n\n\nFinal Evaluation (August 17 – August 24)\nSubmit final work product."
+  },
+  {
+    "objectID": "project.html#implementation",
+    "href": "project.html#implementation",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "Implementation",
+    "text": "Implementation\n\nThe Design Problem\nThe coupling structure in HEOM means you can’t naively slice the hierarchy across MPI ranks — adjacent levels need to communicate, so the partition strategy directly determines whether you get a speedup or just move the bottleneck. The key question is whether the data can be laid out so that most communication is between neighboring ranks rather than all-to-all.\n\n\nTech Stack\n\nPETSc — distributed vectors, matrices, and ODE integration via the TS interface\nMPI / mpi4py — inter-process communication\npetsc4py — Python bindings for PETSc\nQuTiP — existing HEOM infrastructure, benchmark systems, test suite\n\n\n\nWhat Stays Untouched\nThe existing HEOMSolver is completely unmodified. The distributed path is additive — users running small systems on a single machine see no changes."
+  },
+  {
+    "objectID": "project.html#progress",
+    "href": "project.html#progress",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "Progress",
+    "text": "Progress\nThis page will be updated as the project progresses.\n\n\n\nPhase\nStatus\n\n\n\n\nCommunity Bonding — stack setup\n✅ Done\n\n\nWeek 1 — MPI and PETSc exercises\n✅ Done\n\n\nWeek 2 — Profiling existing solver\n🔄 In progress\n\n\nPETSc distributed data structures\n⏳ Upcoming\n\n\nPETSc TS integration\n⏳ Upcoming\n\n\nCorrectness validation\n⏳ Upcoming\n\n\nBenchmarking\n⏳ Upcoming\n\n\nDocumentation and tutorials\n⏳ Upcoming"
+  },
+  {
+    "objectID": "project.html#links",
+    "href": "project.html#links",
+    "title": "Large Scale HEOM Solver Using PETSc - GSoC 2026",
+    "section": "Links",
+    "text": "Links\nStudent: GitHub | Email\nProposal: GSoC 2026 Project Page"
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html",
+    "href": "posts/intro/gsoc-selection.html",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "",
+    "text": "A few months ago, I put together a GSoC proposal half-convinced it wouldn’t go anywhere. I’d been contributing to QuTiP for a while, understood the codebase well enough to spot a real problem, and figured — why not try?\nI’m happy to share that I’ve been selected as a Google Summer of Code 2026 contributor! 🚀"
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
+    "href": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "What I’ll Be Working On",
+    "text": "What I’ll Be Working On\nHere’s the problem: the HEOM solver in QuTiP is single-node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that’s fine. But push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff fast. There’s no workaround — it’s a structural limitation.\nMy project builds the distributed path that’s been missing: integrating PETSc and MPI into the solver so the ODE integration can run across multiple nodes on an HPC cluster.\nThe project will include:\n\nDistributed data layout for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local rather than all-to-all\nPETSc TS integration for distributed vector and matrix operations and time integration\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nHPC documentation and tutorials for running the solver on real cluster infrastructure\n\nThe existing solver stays completely untouched — if you don’t need distributed execution, nothing changes for you."
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#looking-forward",
+    "href": "posts/intro/gsoc-selection.html#looking-forward",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "Looking Forward",
+    "text": "Looking Forward\nI’ve spent the past few months going through the QuTiP codebase, submitting PRs, and getting a feel for how the project works. That groundwork made writing the proposal a lot more concrete — I wasn’t guessing at the architecture, I’d actually traced through it.\nNow I get to spend the summer working on the part that genuinely interested me from the start: the design problem of distributing a coupled hierarchy without turning communication into the new bottleneck.\nOver the next few months, I’ll be:\n\nProfiling the existing solver and nailing down the distributed data layout with mentors\nBuilding and testing the PETSc-based execution path\nValidating correctness and running scaling benchmarks on HPC infrastructure\nDocumenting everything here as I go\n\nExpect posts on the design decisions, the tricky bits, and probably a few dead ends along the way."
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#acknowledgments",
+    "href": "posts/intro/gsoc-selection.html#acknowledgments",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "Acknowledgments",
+    "text": "Acknowledgments\nThanks to the QuTiP team — especially my mentors Alex Pitchford and Eric Giguère — for taking on this project and for the feedback they gave during the proposal stage. Looking forward to the summer.\n\nFollowing along, working on something related, or also doing GSoC this year? Feel free to reach out — always happy to talk HPC, open quantum systems, or open source.\n\n\n\n\n\n\nTipInterested in QuTiP?\n\n\n\nCheck out the QuTiP documentation to learn more about quantum simulations in Python!\n\n\nTags: GSoC2026, HPC, OpenQuantumSystems, OpenSource, Python, QuTiP, NumFOCUS, PETSc, MPI"
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "Hi, I’m Chinmay Tangal – a Computer Engineering undergrad with a growing interest in high-performance computing, open quantum systems, and open-source scientific software. I’m excited to be part of Google Summer of Code 2026 with NumFOCUS, working on a project that sits right at the intersection of quantum physics and systems-level computing.\nThis blog is where I’ll document my GSoC experience, the technical problems I run into, and how I’m thinking through building a cluster-ready quantum solver.\n\n\n\n\n\n\n\n\n\nI’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website\n\n\n\n\n\n\nMay 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →\n\n\n\n\nThis site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
+  },
+  {
+    "objectID": "index.html#about-the-project",
+    "href": "index.html#about-the-project",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "I’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website"
+  },
+  {
+    "objectID": "index.html#recent-posts",
+    "href": "index.html#recent-posts",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "May 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →"
+  },
+  {
+    "objectID": "index.html#about-this-site",
+    "href": "index.html#about-this-site",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "This site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
+  },
+  {
+    "objectID": "about.html",
+    "href": "about.html",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
+  },
+  {
+    "objectID": "about.html#hey",
+    "href": "about.html#hey",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
+  },
+  {
+    "objectID": "about.html#current-work",
+    "href": "about.html#current-work",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Current Work",
+    "text": "Current Work\nGoogle Summer of Code 2026 Contributor\nMay 2026 - Present\nWorking with NumFOCUS on building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). The project integrates PETSc and MPI into the existing solver so that large-scale open quantum system simulations can be distributed across HPC clusters — without touching anything for users who don’t need it.\nKey contributions: - Profiling the existing HEOM solver to identify memory and compute bottlenecks - Designing a distributed data layout for the hierarchy across MPI ranks - Integrating PETSc’s TS interface for distributed ODE integration - Writing HPC tutorials and documentation for real cluster workflows"
+  },
+  {
+    "objectID": "about.html#interests",
+    "href": "about.html#interests",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Interests",
+    "text": "Interests\n\nHigh Performance Computing: Distributed systems, MPI, and scientific computing at scale\nOpen Source: Contributing to scientific Python libraries\nPython Development: Scientific computing, numerical methods, and performance optimization\nResearch: Open quantum systems, computational physics, and HPC architecture"
+  },
+  {
+    "objectID": "about.html#technical-skills",
+    "href": "about.html#technical-skills",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Technical Skills",
+    "text": "Technical Skills\n\nLanguages: Python, C\nQuantum Computing: QuTiP, PETSc, MPI\nTools: Git, GitHub, Jupyter, LaTeX\nWeb Development: Quarto, GitHub Pages"
+  },
+  {
+    "objectID": "about.html#contact",
+    "href": "about.html#contact",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Contact",
+    "text": "Contact\nFeel free to reach out if you want to talk HPC, open quantum systems, or open source.\n\nEmail: chinmaytangal124@gmail.com\nGitHub: github.com/Chinmay-Tangal\nLinkedIn: linkedin.com/in/chinmay-tangal\nTwitter: x.com/Chinmay_Tangal"
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html",
+    "href": "posts/Community Bonding/community-bonding.html",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "",
+    "text": "The community bonding period (May 12 - May 24) is wrapped up. Honestly it went by faster than I expected."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#meeting-the-team",
+    "href": "posts/Community Bonding/community-bonding.html#meeting-the-team",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Meeting the Team",
+    "text": "Meeting the Team\nHad my first meeting with Alex, Emil, Neill and Simon early in the period. Main thing we sorted out was the tech stack — we decided to go with PETSc and MPI for the distributed solver. PETSc handles the distributed data structures and ODE integration through its TS interface, MPI handles the inter-process communication. Makes sense given that PETSc is basically the standard for this kind of scientific computing work on HPC clusters.\nOnce that was settled, the rest of bonding was mostly about getting everything running on my machine and getting comfortable with it."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
+    "href": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Getting the Stack Running",
+    "text": "Getting the Stack Running\nSetting up PETSc locally was… an experience. It’s not the kind of library you just pip install and move on. Got through it though — PETSc built, MPI configured, and a basic test confirming distributed vectors were actually distributing across processes the way they should.\nSpent the remaining time going through PETSc’s documentation properly, particularly the TS interface which is what we’ll be using for the time integration. Also ran through some MPI basics to make sure I’m solid on communication patterns before I need to think about them in the context of the HEOM hierarchy."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#looking-ahead",
+    "href": "posts/Community Bonding/community-bonding.html#looking-ahead",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Looking Ahead",
+    "text": "Looking Ahead\nStack is set up, I know what I’m working with. Coding phase starts now — first order of business is profiling the existing solver to understand where it actually breaks down before building anything new.\n\nNext up: Profiling the existing HEOM solver."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html",
+    "href": "posts/Week-1/week1.html",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "",
+    "text": "Coding phase has started. Week 1 was less about writing solver code and more about actually getting comfortable with the tools I’ll be using — MPI and PETSc. Worked through a set of exercises, each one building on the last."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#starting-with-mpi",
+    "href": "posts/Week-1/week1.html#starting-with-mpi",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Starting with MPI",
+    "text": "Starting with MPI\nStarted with the basics — splitting work across processes, each rank handles its chunk, gather results back to rank 0.\nfrom mpi4py import MPI\n\ncomm = MPI.COMM_WORLD \nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nchunk = 100 // size  \nstart = rank * chunk + 1   \nend   = start + chunk\n\nlocal_results = [(n, n * n) for n in range(start, end)] \n\nprint(f\"Rank {rank}: computed {start}² to {end-1}²\")\n\nall_results = comm.gather(local_results, root=0)\n\nif rank == 0:\n    flat = [item for sublist in all_results for item in sublist]\n    print(f\"\\nRank 0 has all {len(flat)} results\")\n    for n, sq in flat[:5]:\n        print(f\"  {n}² = {sq}\")\n    print(\"  ...\")\nSimple, but it made the mental model concrete."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#petsc-distributed-vectors",
+    "href": "posts/Week-1/week1.html#petsc-distributed-vectors",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "PETSc Distributed Vectors",
+    "text": "PETSc Distributed Vectors\nNext step was PETSc. Created a distributed vector, filled it with values, verified each rank owned the right slice.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nx = PETSc.Vec().create(comm=PETSc.COMM_WORLD)\nx.setSizes(100)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor i in range(lo, hi):\n    x.setValue(i, (i + 1) ** 2)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\nvals = x.getValues(range(lo, hi))\nprint(f\"Rank {rank} owns indices {lo}–{hi-1}, first={int(vals[0])}, last={int(vals[-1])}\")\n\ntotal = x.sum()\nif rank == 0:\n    print(f\"\\nSum of all squares = {int(total)}\")\n    print(f\"Expected           = {sum(i*i for i in range(1,101))}\")\n\nx.destroy()\ngetOwnershipRange() is the pattern I’ll be using constantly — each rank knows which slice of the global data it owns."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
+    "href": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Distributed Matrix-Vector Multiplication",
+    "text": "Distributed Matrix-Vector Multiplication\nBuilt a tridiagonal matrix distributed across ranks and multiplied it by a distributed vector. This is roughly the shape of what the HEOM RHS computation will look like.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nglobal_size = 100\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, float(i))\nx.assemblyBegin()\nx.assemblyEnd()\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setFromOptions()\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    if i &gt; 0:\n        A.setValue(i, i - 1, -1.0)\n    A.setValue(i, i, 2.0)\n    if i &lt; global_size - 1:\n        A.setValue(i, i + 1, -1.0)\n\nA.assemblyBegin()\nA.assemblyEnd()\n\ny = PETSc.Vec().create(comm=comm)\ny.setSizes(global_size)\ny.setFromOptions()\ny.setUp()\n\nA.mult(x, y)\n\ny_lo, y_hi = y.getOwnershipRange()\nlocal_vals = y.getValues(range(y_lo, y_hi))\nprint(f\"Rank {rank} checked indices {y_lo} to {y_hi-1}.\")\nprint(f\"  -&gt; Index {y_lo} value: {local_vals[0]}\")\nprint(f\"  -&gt; Index {y_hi-1} value: {local_vals[-1]}\")\n\nx.destroy()\ny.destroy()\nA.destroy()\nThe assembly step is where MPI communication happens across rank boundaries — PETSc handles that internally."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
+    "href": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Multi-Index Mapping (The HEOM Layout)",
+    "text": "Multi-Index Mapping (The HEOM Layout)\nThis one was directly relevant to the project. In HEOM, auxiliary density matrices are labeled by multi-indices — (0,0), (1,0), (0,1), etc. PETSc only understands flat linear indices, so I needed a mapping function that converts hierarchy coordinates into a 1D index.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nGRID_DIM = 5\nglobal_size = GRID_DIM * GRID_DIM\n\ndef get_flat_index(n1, n2):\n    return n1 * GRID_DIM + n2\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor n1 in range(GRID_DIM):\n    for n2 in range(GRID_DIM):\n        flat_idx = get_flat_index(n1, n2)\n        if lo &lt;= flat_idx &lt; hi:\n            physics_value = float(n1 * 10 + n2)\n            x.setValue(flat_idx, physics_value)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\ntarget_idx = get_flat_index(3, 2)\nif lo &lt;= target_idx &lt; hi:\n    val = x.getValues([target_idx])[0]\n    print(f\"Rank {rank} owns flat index {target_idx} (grid (3,2)). Value: {val}\")\n\nx.destroy()\nThis mapping is going to be central to the actual implementation."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
+    "href": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "ODE Integration with PETSc TS",
+    "text": "ODE Integration with PETSc TS\nLast exercise — hooking up PETSc’s time-stepper (TS) to actually solve an ODE in parallel. Used a simple decay system dx/dt = -0.5x so I could verify the output analytically.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nglobal_size = 10\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    A.setValue(i, i, -0.5)\nA.assemblyBegin()\nA.assemblyEnd()\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setUp()\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, 10.0)\nx.assemblyBegin()\nx.assemblyEnd()\n\ndef rhs_function(ts, t, vec_x, vec_f):\n    A.mult(vec_x, vec_f)\n\nts = PETSc.TS().create(comm=comm)\nts.setProblemType(ts.ProblemType.LINEAR)\nts.setRHSFunction(rhs_function)\nts.setType('rk')\nts.setTime(0.0)\nts.setMaxTime(2.0)\nts.setTimeStep(0.1)\nts.setFromOptions()\n\nts.solve(x)\n\nv_lo, v_hi = x.getOwnershipRange()\nlocal_vals = x.getValues(range(v_lo, v_hi))\nif rank == 0:\n    print(f\"Initial value was 10.0. After evolving to t=2.0, index 0 value is: {local_vals[0]:.4f}\")\n    # Analytical: 10 * e^(-0.5 * 2) ≈ 3.6788\n\nx.destroy()\nA.destroy()\nts.destroy()\nThis is the pattern the distributed HEOM solver will follow — define a distributed RHS function, hand it to PETSc TS, let it integrate. Good to have a working toy version before dealing with the actual hierarchy.\n\nNext up: Profiling the existing HEOM solver to understand where it breaks down."
+  }
+]

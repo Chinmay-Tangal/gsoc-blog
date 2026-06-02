@@ -1,0 +1,30 @@
+---
+title: "Community Bonding Period: Setting the Foundation for Success"
+author: "Chinmay Tangal"
+date: "2026-05-31"
+page-layout: article
+categories: [GSoC 2026, Community Bonding, QuTiP]
+
+---
+
+The community bonding period (May 12 - May 24) is wrapped up. Honestly it went by faster than I expected.
+
+## Meeting the Team
+
+Had my first meeting with Alex, Emil, Neill and Simon early in the period. Main thing we sorted out was the tech stack — we decided to go with PETSc and MPI for the distributed solver. PETSc handles the distributed data structures and ODE integration through its TS interface, MPI handles the inter-process communication. Makes sense given that PETSc is basically the standard for this kind of scientific computing work on HPC clusters.
+
+Once that was settled, the rest of bonding was mostly about getting everything running on my machine and getting comfortable with it.
+
+## Getting the Stack Running
+
+Setting up PETSc locally was... an experience. It's not the kind of library you just pip install and move on. Got through it though — PETSc built, MPI configured, and a basic test confirming distributed vectors were actually distributing across processes the way they should.
+
+Spent the remaining time going through PETSc's documentation properly, particularly the TS interface which is what we'll be using for the time integration. Also ran through some MPI basics to make sure I'm solid on communication patterns before I need to think about them in the context of the HEOM hierarchy.
+
+## Looking Ahead
+
+Stack is set up, I know what I'm working with. Coding phase starts now — first order of business is profiling the existing solver to understand where it actually breaks down before building anything new.
+
+---
+
+*Next up: Profiling the existing HEOM solver.*

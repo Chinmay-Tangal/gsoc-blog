@@ -1,0 +1,95 @@
+---
+title: "Large Scale HEOM Solver Using PETSc - GSoC 2026"
+page-layout: article
+---
+
+**Student**: Chinmay Tangal
+**Organization**: [QuTiP - Quantum Toolbox in Python](https://qutip.readthedocs.io/en/latest/index.html), [NumFOCUS](https://numfocus.org/) \
+**Mentors**: Alex Pitchford, Emil VATAI, Neill Lambert \
+**Project Duration**: May 2026 - August 2026
+
+## Project Overview
+
+### The Problem
+
+HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. It does this by propagating an entire hierarchy of coupled auxiliary density matrices simultaneously, which is what makes it exact and also what makes it expensive. Memory and compute blow up fast as hierarchy depth or system size grows.
+
+The current QuTiP implementation runs on a single node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that's fine. Push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff with no workaround — it's a structural limitation.
+
+### What This Project Builds
+
+A distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster. The existing solver stays completely untouched — users who don't need distributed execution shouldn't have to think about any of this.
+
+### Key Goals
+
+- **Distributed data layout** for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local
+- **PETSc TS integration** for distributed ODE integration across ranks
+- **Correctness first** — the distributed path must produce identical results to the existing solver before any performance work
+- **Benchmarks** across hierarchy depths, system sizes, and node counts
+- **HPC documentation** for running the solver on real cluster infrastructure
+
+## Project Timeline
+
+### Community Bonding (May 12 – May 24)
+- Aligned with mentors on tech stack: PETSc and MPI
+- Set up local development environment with PETSc and MPI
+- Got familiar with PETSc distributed vectors, matrices, and TS interface
+
+### Coding Phase 1 (May 25 – July 5)
+
+**Week 1–2**: Profile the existing HEOM solver on benchmark systems at different hierarchy depths and system sizes. Document bottlenecks in a reproducible format.
+
+**Week 3–4**: Implement PETSc-based distributed vectors and matrices for the HEOM hierarchy. Handle distribution of coupled density matrices across MPI ranks.
+
+**Week 5–6**: Connect distributed data structures to PETSc's ODE/TS solver. Run small benchmark systems through both solver paths and validate correctness.
+
+### Midterm Evaluation (July 6 – July 10)
+Deliverables: working distributed HEOM ODE solver via PETSc, correctness validated against existing solver, baseline profiling results documented.
+
+### Coding Phase 2 (July 6 – August 16)
+
+**Week 7–8**: Scale testing at larger hierarchy depths and node counts. Debug MPI-related issues — load imbalance, communication overhead, memory usage across ranks.
+
+**Week 9–10**: Benchmark distributed solver across different node counts and hierarchy sizes. Optimize remaining bottlenecks.
+
+**Week 11–12**: Write documentation and HPC tutorials. Finalize test suite. Clean up code from mentor review.
+
+### Final Evaluation (August 17 – August 24)
+Submit final work product.
+
+## Implementation
+
+### The Design Problem
+
+The coupling structure in HEOM means you can't naively slice the hierarchy across MPI ranks — adjacent levels need to communicate, so the partition strategy directly determines whether you get a speedup or just move the bottleneck. The key question is whether the data can be laid out so that most communication is between neighboring ranks rather than all-to-all.
+
+### Tech Stack
+
+- **PETSc** — distributed vectors, matrices, and ODE integration via the TS interface
+- **MPI / mpi4py** — inter-process communication
+- **petsc4py** — Python bindings for PETSc
+- **QuTiP** — existing HEOM infrastructure, benchmark systems, test suite
+
+### What Stays Untouched
+
+The existing `HEOMSolver` is completely unmodified. The distributed path is additive — users running small systems on a single machine see no changes.
+
+## Progress
+
+*This page will be updated as the project progresses.*
+
+| Phase | Status |
+|---|---|
+| Community Bonding — stack setup | ✅ Done |
+| Week 1 — MPI and PETSc exercises | ✅ Done |
+| Week 2 — Profiling existing solver | 🔄 In progress |
+| PETSc distributed data structures | ⏳ Upcoming |
+| PETSc TS integration | ⏳ Upcoming |
+| Correctness validation | ⏳ Upcoming |
+| Benchmarking | ⏳ Upcoming |
+| Documentation and tutorials | ⏳ Upcoming |
+
+## Links
+
+**Student**: [GitHub](https://github.com/Chinmay-Tangal) | [Email](mailto:chinmaytangal124@gmail.com) \
+**Proposal**: [GSoC 2026 Project Page](https://summerofcode.withgoogle.com/)

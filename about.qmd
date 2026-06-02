@@ -1,0 +1,48 @@
+---
+title: ""
+page-layout: article
+
+---
+
+## Hey!
+
+I'm a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I'm a **Google Summer of Code 2026** contributor, working on making QuTiP's HEOM solver scale beyond a single machine.
+
+## Current Work
+
+**Google Summer of Code 2026 Contributor**  
+*May 2026 - Present*
+
+Working with NumFOCUS on building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). The project integrates PETSc and MPI into the existing solver so that large-scale open quantum system simulations can be distributed across HPC clusters — without touching anything for users who don't need it.
+
+**Key contributions:**
+- Profiling the existing HEOM solver to identify memory and compute bottlenecks
+- Designing a distributed data layout for the hierarchy across MPI ranks
+- Integrating PETSc's TS interface for distributed ODE integration
+- Writing HPC tutorials and documentation for real cluster workflows
+
+## Interests
+
+- **High Performance Computing:** Distributed systems, MPI, and scientific computing at scale
+- **Open Source:** Contributing to scientific Python libraries
+- **Python Development:** Scientific computing, numerical methods, and performance optimization
+- **Research:** Open quantum systems, computational physics, and HPC architecture
+
+## Technical Skills
+
+- **Languages:** Python, C
+- **Quantum Computing:** QuTiP, PETSc, MPI
+- **Tools:** Git, GitHub, Jupyter, LaTeX
+- **Web Development:** Quarto, GitHub Pages
+
+
+## Contact
+
+Feel free to reach out if you want to talk HPC, open quantum systems, or open source.
+
+- **Email:** chinmaytangal124@gmail.com
+- **GitHub:** [github.com/Chinmay-Tangal](https://github.com/Chinmay-Tangal)
+- **LinkedIn:** [linkedin.com/in/chinmay-tangal](https://linkedin.com/in/chinmay-tangal)
+- **Twitter:** [x.com/Chinmay_Tangal](https://x.com/Chinmay_Tangal)
+
+---

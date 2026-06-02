@@ -1,0 +1,58 @@
+---
+title: "Exciting News: I'm Joining Google Summer of Code 2026!"
+author: "Chinmay Tangal"
+date: "2026-05-21"
+page-layout: article
+categories: [GSoC 2026, OpenSource, Python, HPC, quantum]
+title-block-banner: false
+---
+
+A few months ago, I put together a GSoC proposal half-convinced it wouldn't go anywhere. I'd been contributing to QuTiP for a while, understood the codebase well enough to spot a real problem, and figured — why not try?
+
+**I'm happy to share that I've been selected as a Google Summer of Code 2026 contributor!** 🚀
+
+## What I'll Be Working On
+
+Here's the problem: the HEOM solver in QuTiP is single-node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that's fine. But push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff fast. There's no workaround — it's a structural limitation.
+
+My project builds the distributed path that's been missing: integrating PETSc and MPI into the solver so the ODE integration can run across multiple nodes on an HPC cluster.
+
+The project will include:
+
+- **Distributed data layout** for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local rather than all-to-all
+- **PETSc TS integration** for distributed vector and matrix operations and time integration
+- **Correctness validation** against the existing solver on standard benchmark systems
+- **Performance benchmarks** across hierarchy depths, system sizes, and node counts
+- **HPC documentation and tutorials** for running the solver on real cluster infrastructure
+
+The existing solver stays completely untouched — if you don't need distributed execution, nothing changes for you.
+
+## Looking Forward
+
+I've spent the past few months going through the QuTiP codebase, submitting PRs, and getting a feel for how the project works. That groundwork made writing the proposal a lot more concrete — I wasn't guessing at the architecture, I'd actually traced through it.
+
+Now I get to spend the summer working on the part that genuinely interested me from the start: the design problem of distributing a coupled hierarchy without turning communication into the new bottleneck.
+
+Over the next few months, I'll be:
+
+- Profiling the existing solver and nailing down the distributed data layout with mentors
+- Building and testing the PETSc-based execution path
+- Validating correctness and running scaling benchmarks on HPC infrastructure
+- Documenting everything here as I go
+
+Expect posts on the design decisions, the tricky bits, and probably a few dead ends along the way.
+
+## Acknowledgments
+
+Thanks to the **QuTiP team** — especially my mentors Alex Pitchford and Eric Giguère — for taking on this project and for the feedback they gave during the proposal stage. Looking forward to the summer.
+
+---
+
+*Following along, working on something related, or also doing GSoC this year? Feel free to reach out — always happy to talk HPC, open quantum systems, or open source.*
+
+::: {.callout-tip}
+## Interested in QuTiP?
+Check out the [QuTiP documentation](https://qutip.org/) to learn more about quantum simulations in Python!
+:::
+
+**Tags:** GSoC2026, HPC, OpenQuantumSystems, OpenSource, Python, QuTiP, NumFOCUS, PETSc, MPI

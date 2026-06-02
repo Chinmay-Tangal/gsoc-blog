@@ -1,0 +1,40 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Google Summer of Code 2026 | QuTiP | NumFOCUS"
+  
+  navbar:
+    background: primary
+    search: true
+    left:
+      - href: index.qmd
+        text: Home
+      - href: blog.qmd
+        text: Blog
+      - href: project.qmd        
+        text: Project
+      - href: about.qmd
+        text: About
+    right:
+      - text: Chinmay Tangal
+      - icon: github
+        href: https://github.com/Chinmay-Tangal
+      - icon: linkedin  
+        href: https://linkedin.com/in/chinmay-tangal
+
+format:
+  html:
+    theme: [cosmo]
+    css: styles.css
+    toc: true
+    code-copy: true
+    code-overflow: wrap
+    html-math-method: katex
+    page-layout: article
+    margin-left: 2em
+    margin-right: 2em
+
+execute:
+  freeze: auto
