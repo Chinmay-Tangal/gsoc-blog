@@ -47,7 +47,7 @@ The existing solver stays completely untouched — users who don't need distribu
 
 I'd been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn't expect it to go anywhere — but here we are...
 
-[Read more →](posts/intro/gsoc-2026-selection.qmd)
+[Read more →](posts/intro/gsoc-selection.qmd)
 
 
 ## About This Site

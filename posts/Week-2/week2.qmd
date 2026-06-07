@@ -1,0 +1,269 @@
+---
+title: "Week 2: Profiling the Existing HEOM Solver"
+author: "Chinmay Tangal"
+date: "2026-06-8"
+page-layout: article
+categories: [GSoC 2026, Week 2, QuTiP, HEOM, Profiling, Performance]
+---
+
+Coding phase Week 2 was focused on understanding the current HEOM implementation before making any modifications to it.
+
+Before attempting PETSc integration, I wanted to establish a performance baseline for the existing solver, identify the major bottlenecks, and understand how the computational cost scales with hierarchy depth and system size.
+
+## Benchmarking Hierarchy Depth Scaling
+
+I started with a standard spin-boson model and measured runtime as the hierarchy depth increased. Alongside runtime, I also recorded the number of Auxiliary Density Operators (ADOs), which is one of the main drivers of HEOM complexity.
+
+### Benchmark Script
+
+```python
+import time
+import numpy as np
+
+from qutip import basis, sigmaz
+from qutip.solver.heom import HEOMSolver, DrudeLorentzBath
+
+# System parameters
+epsilon = 1.0
+H = 0.5 * epsilon * sigmaz()
+
+rho0 = basis(2, 0) * basis(2, 0).dag()
+
+# Bath parameters
+lam = 0.1
+gamma = 0.5
+T = 1.0
+Nk = 8
+
+Q = sigmaz()
+
+tlist = np.linspace(0, 100, 2000)
+
+depths = [4, 6, 8, 10]
+
+for depth in depths:
+
+    bath = DrudeLorentzBath(
+        Q=Q,
+        lam=lam,
+        gamma=gamma,
+        T=T,
+        Nk=Nk
+    )
+
+    start = time.perf_counter()
+
+    solver = HEOMSolver(
+        H,
+        bath,
+        max_depth=depth,
+        options={"progress_bar": False}
+    )
+
+    ado_count = len(solver.ados.labels)
+
+    result = solver.run(rho0, tlist)
+
+    runtime = time.perf_counter() - start
+
+    print(
+        f"Depth={depth}, "
+        f"ADOs={ado_count}, "
+        f"Runtime={runtime:.3f} s"
+    )
+```
+
+### Results
+
+| Depth | ADO Count | Runtime (s) |
+|---------|---------:|---------:|
+| 4 | 715 | 0.347 |
+| 6 | 5005 | 2.189 |
+| 8 | 24310 | 18.029 |
+| 10 | 92378 | 81.407 |
+
+The growth is substantial. Increasing the hierarchy depth from 4 to 10 increases the number of ADOs by roughly 129× while runtime increases by approximately 235×.
+
+This immediately highlights why HEOM becomes challenging for larger simulations.
+
+## Measuring Memory Usage
+
+Runtime is only one part of the picture. Since the long-term goal is distributed-memory execution, I also measured peak memory usage using:
+
+```bash
+/usr/bin/time -v python benchmark.py
+```
+
+The metric of interest was:
+
+```text
+Maximum resident set size (kbytes)
+```
+
+### Results
+
+| Depth | Peak Memory (MB) |
+|---------|---------:|
+| 4 | 121.6 |
+| 6 | 133.7 |
+| 8 | 199.5 |
+| 10 | 458.8 |
+
+Memory usage increases significantly as the hierarchy expands, particularly at larger depths.
+
+## Profiling the Solver
+
+After collecting runtime measurements, I used Python's built-in profiler to determine where execution time was actually being spent.
+
+```bash
+python -m cProfile -o depth10.prof benchmark.py
+```
+
+The profiling data was inspected using:
+
+```bash
+python -m pstats depth10.prof
+```
+
+and sorted by cumulative runtime:
+
+```text
+sort cumulative
+stats 30
+```
+
+### Dominant Bottlenecks
+
+The largest contributors to runtime were:
+
+| Function | Description |
+|-----------|-----------|
+| `scipy.integrate._vode.zvode` | ODE integration |
+| `_calculate_rhs` | HEOM RHS construction |
+| `_rhs` | RHS evaluation |
+| `_restore_state` | State reconstruction |
+| `_grad_prev` / `_grad_next` | Hierarchy traversal |
+
+The profile clearly showed that most of the runtime is spent either integrating the large HEOM system of equations or constructing and applying the hierarchy coupling structure.
+
+These are likely to be key targets for future optimization and parallelization.
+
+## Scaling with System Size
+
+Hierarchy depth is only one source of complexity. The cost of operations also depends on the size of the underlying quantum system.
+
+To investigate this, I repeated the benchmark using a two-qubit Hamiltonian.
+
+### Two-Qubit Benchmark
+
+```python
+import time
+import numpy as np
+
+from qutip import (
+    basis,
+    sigmaz,
+    qeye,
+    tensor
+)
+
+from qutip.solver.heom import HEOMSolver, DrudeLorentzBath
+
+H = (
+    0.5 * tensor(sigmaz(), qeye(2))
+    + 0.5 * tensor(qeye(2), sigmaz())
+)
+
+psi0 = tensor(basis(2, 0), basis(2, 0))
+rho0 = psi0 * psi0.dag()
+
+lam = 0.1
+gamma = 0.5
+T = 1.0
+Nk = 8
+
+Q = tensor(sigmaz(), qeye(2))
+
+tlist = np.linspace(0, 100, 2000)
+
+depths = [4, 6, 8, 10]
+
+for depth in depths:
+
+    bath = DrudeLorentzBath(
+        Q=Q,
+        lam=lam,
+        gamma=gamma,
+        T=T,
+        Nk=Nk
+    )
+
+    start = time.perf_counter()
+
+    solver = HEOMSolver(
+        H,
+        bath,
+        max_depth=depth,
+        options={"progress_bar": False}
+    )
+
+    ado_count = len(solver.ados.labels)
+
+    result = solver.run(rho0, tlist)
+
+    runtime = time.perf_counter() - start
+
+    print(
+        f"Depth={depth}, "
+        f"ADOs={ado_count}, "
+        f"Runtime={runtime:.3f} s"
+    )
+```
+
+### Results
+
+| Depth | ADO Count | Runtime (s) |
+|---------|---------:|---------:|
+| 4 | 715 | 0.861 |
+| 6 | 5005 | 11.169 |
+| 8 | 24310 | 68.927 |
+| 10 | 92378 | 308.473 |
+
+The number of ADOs remains unchanged because the hierarchy structure is the same, but each ADO becomes more expensive to evolve due to the larger Hilbert space dimension.
+
+This demonstrates a second scaling challenge:
+
+- Increasing hierarchy depth increases the number of ADOs.
+- Increasing system size increases the computational cost per ADO.
+
+Both effects contribute significantly to runtime growth.
+
+## Key Findings
+
+By the end of the week I had established a baseline performance profile of the current HEOM implementation.
+
+- Runtime grows rapidly with hierarchy depth.
+- Memory usage increases substantially as the hierarchy expands.
+- ODE integration dominates overall runtime.
+- RHS construction and hierarchy traversal are major computational bottlenecks.
+- Larger quantum systems significantly increase the cost of evolving each ADO.
+
+Most importantly, these measurements provide a reproducible baseline against which future PETSc-based implementations can be compared.
+
+## Looking Ahead
+
+The next step is to dig deeper into the HEOM source code and understand how hierarchy data structures, ADO mappings, and RHS assembly are implemented internally.
+
+The profiling results point directly toward the parts of the codebase that deserve the closest attention:
+
+- `_calculate_rhs`
+- `_rhs`
+- `_grad_prev`
+- `_grad_next`
+- `_restore_state`
+
+Understanding how these pieces interact will be important before attempting any distributed-memory redesign using PETSc vectors, matrices, and TS integrators.
+
+---
+
+*Next up: exploring the HEOM internals and identifying how the hierarchy structure can be mapped onto PETSc's distributed data structures.*
