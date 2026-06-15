@@ -42,6 +42,13 @@
     "text": "Links\nStudent: GitHub | Email\nProposal: GSoC 2026 Project Page"
   },
   {
+    "objectID": "posts/Week-3/heom_rhs_bridge.html",
+    "href": "posts/Week-3/heom_rhs_bridge.html",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "import time\nimport numpy as np\nimport scipy.sparse as sp\nfrom scipy.integrate import solve_ivp\nimport matplotlib.pyplot as plt\n\nfrom qutip import basis, sigmaz, expect\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\n\n# system\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\n# bath\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\nQ = sigmaz()\n\ntlist = np.linspace(0, 20, 500)\ndepth = 2\nn = 2\n\n\n# reference run using the standard qutip solver\nbath = DrudeLorentzBath(Q=Q, lam=lam, gamma=gamma, T=T, Nk=Nk)\nsolver = HEOMSolver(H, bath, max_depth=depth, options={\"progress_bar\": False})\n\nn_ados = solver._n_ados\nn_total = n**2 * n_ados\n\nprint(f\"ADOs: {n_ados}\")\nprint(f\"state vector length: {n_total}\")\n\nt0 = time.perf_counter()\nresult_qutip = solver.run(rho0, tlist)\nt_qutip = time.perf_counter() - t0\n\nprint(f\"qutip runtime: {t_qutip:.3f} s\")\n\nsz_qutip = expect(sigmaz(), result_qutip.states)\n\n\n# extract the RHS matrix\n# solver.rhs(0) returns the full HEOM RHS as a qutip Qobj\n# .full() converts it to a numpy array\n# for a time-independent system this matrix does not change, so rhs(0) is enough\nRHS = sp.csr_matrix(solver.rhs(0).full())\n\nprint(f\"RHS shape: {RHS.shape}\")\nprint(f\"non-zeros: {RHS.nnz} out of {n_total**2} ({100*RHS.nnz/n_total**2:.1f}%)\")\n\n\n# build the extended initial state vector\n# HEOM state = [vec(rho_s), 0, 0, ...] where all ADOs start at zero\n# vec uses column-major order (qutip's convention)\nrho0_he = np.zeros(n_total, dtype=complex)\nrho0_he[:n**2] = rho0.full().ravel(\"F\")\n\nprint(f\"first 4 entries: {rho0_he[:4].real}  (should be [1, 0, 0, 0])\")\n\n\n# solve the same ODE using an external integrator\n# this is the part that will be replaced by petsc later\n# the ODE is: d/dt rho_he = RHS @ rho_he\n\ndef rhs_fn(t, y):\n    return RHS @ y\n\nt0 = time.perf_counter()\nsol = solve_ivp(\n    rhs_fn,\n    t_span=(tlist[0], tlist[-1]),\n    y0=rho0_he,\n    t_eval=tlist,\n    method=\"RK45\",\n    rtol=1e-8,\n    atol=1e-10,\n)\nt_bridge = time.perf_counter() - t0\n\nprint(f\"bridge runtime: {t_bridge:.3f} s\")\nprint(f\"success: {sol.success}\")\n\n\n# extract rho_s(t) from the bridge solution\n# first n^2 entries of each column are vec(rho_s), reshape back to n x n\n\ndef extract_rho_s(y):\n    return y[:n**2].reshape((n, n), order=\"F\")\n\nsz_bridge = np.array([\n    extract_rho_s(sol.y[:, i])[0, 0].real - extract_rho_s(sol.y[:, i])[1, 1].real\n    for i in range(len(tlist))\n])\n\n\n# validation\nmax_err = np.max(np.abs(sz_qutip - sz_bridge))\nprint(f\"max error vs qutip: {max_err:.2e}\")\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\naxes[0].plot(tlist, sz_qutip, lw=2, label=\"QuTiP\")\naxes[0].plot(tlist, sz_bridge, lw=1.5, ls=\"--\", label=\"bridge (scipy RK45)\")\naxes[0].set_xlabel(\"time\")\naxes[0].set_ylabel(r\"$\\langle \\sigma_z \\rangle$\")\naxes[0].legend()\naxes[0].grid(alpha=0.3)\n\naxes[1].semilogy(tlist, np.abs(sz_qutip - sz_bridge) + 1e-16)\naxes[1].set_xlabel(\"time\")\naxes[1].set_ylabel(\"pointwise error\")\naxes[1].grid(alpha=0.3)\n\nplt.tight_layout()\nplt.savefig(\"bridge_validation.png\", dpi=150, bbox_inches=\"tight\")\nplt.show()\n\n\n# petsc bridge\n# swap USE_PETSC to True after installing petsc4py\n# install: conda install -c conda-forge petsc petsc4py mpi4py\n\nUSE_PETSC = False\n\nif USE_PETSC:\n    import petsc4py\n    petsc4py.init()\n    from petsc4py import PETSc\n\n    # build petsc matrix from CSR data\n    A = PETSc.Mat().createAIJ(\n        size=(n_total, n_total),\n        csr=(RHS.indptr, RHS.indices, RHS.data),\n        comm=PETSc.COMM_WORLD,\n    )\n    A.assemblyBegin()\n    A.assemblyEnd()\n\n    x = A.createVecRight()\n    f = A.createVecLeft()\n    x.setValues(range(n_total), rho0_he)\n    x.assemblyBegin()\n    x.assemblyEnd()\n\n    def rhs_petsc(ts, t, x, f):\n        A.mult(x, f)\n\n    ts = PETSc.TS().create(comm=PETSc.COMM_WORLD)\n    ts.setType(PETSc.TS.Type.RK)\n    ts.setRHSFunction(rhs_petsc, f)\n    ts.setTime(tlist[0])\n    ts.setMaxTime(tlist[-1])\n    ts.setTimeStep(tlist[1] - tlist[0])\n    ts.setTolerances(rtol=1e-8, atol=1e-10)\n    ts.setFromOptions()\n\n    t0 = time.perf_counter()\n    ts.solve(x)\n    t_petsc = time.perf_counter() - t0\n\n    y_final = np.array(x.getArray())\n    rho_final = extract_rho_s(y_final)\n    sz_final = rho_final[0, 0].real - rho_final[1, 1].real\n\n    print(f\"petsc runtime: {t_petsc:.3f} s\")\n    print(f\"&lt;sigma_z&gt; at t_final: {sz_final:.6f}\")\n    print(f\"qutip reference:      {sz_qutip[-1]:.6f}\")\nelse:\n    print(\"petsc bridge skipped. set USE_PETSC = True to run.\")"
+  },
+  {
     "objectID": "posts/Week-1/week1.html",
     "href": "posts/Week-1/week1.html",
     "title": "Week 1: Getting Hands-On with MPI and PETSc",
@@ -257,5 +264,82 @@
     "title": "Week 2: Profiling the Existing HEOM Solver",
     "section": "Looking Ahead",
     "text": "Looking Ahead\nThe next step is to dig deeper into the HEOM source code and understand how hierarchy data structures, ADO mappings, and RHS assembly are implemented internally.\nThe profiling results point directly toward the parts of the codebase that deserve the closest attention:\n\n_calculate_rhs\n_rhs\n_grad_prev\n_grad_next\n_restore_state\n\nUnderstanding how these pieces interact will be important before attempting any distributed-memory redesign using PETSc vectors, matrices, and TS integrators.\n\nNext up: exploring the HEOM internals and identifying how the hierarchy structure can be mapped onto PETSc’s distributed data structures."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html",
+    "href": "posts/Week-3/week3.html",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "",
+    "text": "Week 3 was focused on understanding how the QuTiP HEOM solver actually integrates the equations of motion, and building a path to replace that integration with PETSc.\nThe profiling from last week showed that most of the runtime is spent inside the ODE integrator. The question this week was: can we extract just the matrix that drives the ODE, and hand it to an external solver without touching anything else in QuTiP?\nThe answer is yes, and the mechanism is simpler than expected."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#the-core-idea",
+    "href": "posts/Week-3/week3.html#the-core-idea",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "The Core Idea",
+    "text": "The Core Idea\nHEOM propagates not just the system density matrix \\rho_S but an entire hierarchy of auxiliary density operators (ADOs). If you stack all of them into a single vector:\n\n\\vec{\\rho} = \\begin{pmatrix} \\text{vec}(\\rho^{(\\mathbf{0})}) \\\\ \\text{vec}(\\rho^{(\\mathbf{e}_1)}) \\\\ \\vdots \\end{pmatrix}\n\nthen all of the coupled HEOM equations collapse into one linear ODE:\n\n\\frac{d}{dt}\\vec{\\rho}(t) = \\mathbf{R} \\cdot \\vec{\\rho}(t)\n\nQuTiP builds this matrix \\mathbf{R} internally. The method solver.rhs(t) exposes it directly. For a time-independent Hamiltonian, \\mathbf{R} does not change, so solver.rhs(0).full() gives you the full matrix as a NumPy array.\nThis is the only QuTiP-specific step in the whole bridge. Once you have \\mathbf{R}, the rest is standard linear algebra."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#setup",
+    "href": "posts/Week-3/week3.html#setup",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Setup",
+    "text": "Setup\nStandard spin-boson model, same parameters as last week.\nimport time\nimport numpy as np\nimport scipy.sparse as sp\nfrom scipy.integrate import solve_ivp\n\nfrom qutip import basis, sigmaz, expect\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\nQ = sigmaz()\n\ntlist = np.linspace(0, 20, 500)\ndepth = 2\nn = 2"
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#reference-run",
+    "href": "posts/Week-3/week3.html#reference-run",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Reference Run",
+    "text": "Reference Run\nFirst, run the standard QuTiP solver to get the ground truth.\nbath = DrudeLorentzBath(Q=Q, lam=lam, gamma=gamma, T=T, Nk=Nk)\nsolver = HEOMSolver(H, bath, max_depth=depth, options={\"progress_bar\": False})\n\nn_ados = solver._n_ados\nn_total = n**2 * n_ados\n\nresult_qutip = solver.run(rho0, tlist)\nsz_qutip = expect(sigmaz(), result_qutip.states)\nAt depth 2 with Nk=8, this gives 55 ADOs and a state vector of length 220."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#extracting-the-rhs-matrix",
+    "href": "posts/Week-3/week3.html#extracting-the-rhs-matrix",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Extracting the RHS Matrix",
+    "text": "Extracting the RHS Matrix\nRHS = sp.csr_matrix(solver.rhs(0).full())\nThe matrix is 220×220 with only 598 nonzeros — 98.8% sparse. This is a direct consequence of the hierarchy structure: each ADO only couples to its immediate neighbors one level up or down. The sparsity is what makes distributed execution with PETSc practical, since the inter-rank communication is bounded rather than all-to-all."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#building-the-initial-state-vector",
+    "href": "posts/Week-3/week3.html#building-the-initial-state-vector",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Building the Initial State Vector",
+    "text": "Building the Initial State Vector\nAt t = 0, only the physical density matrix is nonzero. All ADOs start at zero because there is no bath memory at the initial time.\nrho0_he = np.zeros(n_total, dtype=complex)\nrho0_he[:n**2] = rho0.full().ravel(\"F\")\nThe column-major flattening (\"F\" order) matches QuTiP’s Liouville-space convention, where \\text{vec}(\\rho)_{i+nj} = \\rho_{ij}."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#solving-with-an-external-integrator",
+    "href": "posts/Week-3/week3.html#solving-with-an-external-integrator",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Solving with an External Integrator",
+    "text": "Solving with an External Integrator\nWith \\mathbf{R} and the initial vector in hand, the ODE can be handed to any integrator.\ndef rhs_fn(t, y):\n    return RHS @ y\n\nsol = solve_ivp(\n    rhs_fn,\n    t_span=(tlist[0], tlist[-1]),\n    y0=rho0_he,\n    t_eval=tlist,\n    method=\"RK45\",\n    rtol=1e-8,\n    atol=1e-10,\n)\nTo recover \\rho_S(t) at each timestep:\ndef extract_rho_s(y):\n    return y[:n**2].reshape((n, n), order=\"F\")\n\nsz_bridge = np.array([\n    extract_rho_s(sol.y[:, i])[0, 0].real - extract_rho_s(sol.y[:, i])[1, 1].real\n    for i in range(len(tlist))\n])"
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#validation",
+    "href": "posts/Week-3/week3.html#validation",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Validation",
+    "text": "Validation\nmax_err = np.max(np.abs(sz_qutip - sz_bridge))\nprint(f\"max error vs qutip: {max_err:.2e}\")\nmax error vs qutip: 0.00e+00\nThe bridge matches QuTiP at machine precision. The two \\langle \\sigma_z \\rangle curves are numerically identical."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#the-petsc-swap",
+    "href": "posts/Week-3/week3.html#the-petsc-swap",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "The PETSc Swap",
+    "text": "The PETSc Swap\nThe entire bridge reduces to one function call:\ndef rhs_fn(t, y):\n    return RHS @ y\nReplacing this with PETSc means:\n\nRHS becomes a distributed PETSc.Mat (each MPI rank owns a row slice)\ny becomes a distributed PETSc.Vec\nRHS @ y becomes A.mult(x, f), which handles inter-rank communication automatically\n\n# petsc equivalent (runs with mpirun -n N python script.py)\ndef rhs_petsc(ts, t, x, f):\n    A.mult(x, f)\n\nts = PETSc.TS().create(comm=PETSc.COMM_WORLD)\nts.setType(PETSc.TS.Type.RK)\nts.setRHSFunction(rhs_petsc, f)\nts.setTime(tlist[0])\nts.setMaxTime(tlist[-1])\nts.setTimeStep(tlist[1] - tlist[0])\nts.setTolerances(rtol=1e-8, atol=1e-10)\nts.solve(x)\nThe QuTiP side stays completely untouched. The only thing that changes is what happens after solver.rhs(0).full()."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#why-the-sparsity-matters",
+    "href": "posts/Week-3/week3.html#why-the-sparsity-matters",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Why the Sparsity Matters",
+    "text": "Why the Sparsity Matters\nAt depth 2 the matrix is small enough that this is easy. The motivation becomes clearer looking at larger depths:\n\n\n\nDepth\nADOs\nState vector\nDense matrix\n\n\n\n\n2\n55\n220\n0.8 MB\n\n\n3\n220\n880\n12.4 MB\n\n\n4\n715\n2860\n130.9 MB\n\n\n5\n2002\n8008\n1,026 MB\n\n\n\nAt depth 5, storing \\mathbf{R} as a dense matrix already requires 1 GB on a single node. In sparse format the same matrix has under 0.1% fill. Distributing those nonzeros across MPI ranks via PETSc’s MatMPIAIJ is the path to running HEOM at depths that are currently out of reach."
+  },
+  {
+    "objectID": "posts/Week-3/week3.html#next-steps",
+    "href": "posts/Week-3/week3.html#next-steps",
+    "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
+    "section": "Next Steps",
+    "text": "Next Steps\nThe next step is getting the PETSc TS call working end-to-end on a single process, then validating that it produces the same result as the SciPy bridge above. After that, the work shifts to the distributed data layout question: which rows of \\mathbf{R} live on which MPI rank, and how to minimize inter-rank communication given the hierarchy’s coupling structure.\n\nFull notebook: heom_rhs_bridge.ipynb"
   }
 ]

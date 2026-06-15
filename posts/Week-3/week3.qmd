@@ -1,0 +1,192 @@
+---
+title: "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge"
+author: "Chinmay Tangal"
+date: "2026-06-15"
+page-layout: article
+categories: [GSoC 2026, Week 3, QuTiP, HEOM, PETSc, ODE]
+---
+
+Week 3 was focused on understanding how the QuTiP HEOM solver actually integrates the equations of motion, and building a path to replace that integration with PETSc.
+
+The profiling from last week showed that most of the runtime is spent inside the ODE integrator. The question this week was: can we extract just the matrix that drives the ODE, and hand it to an external solver without touching anything else in QuTiP?
+
+The answer is yes, and the mechanism is simpler than expected.
+
+## The Core Idea
+
+HEOM propagates not just the system density matrix $\rho_S$ but an entire hierarchy of auxiliary density operators (ADOs). If you stack all of them into a single vector:
+
+$$
+\vec{\rho} = \begin{pmatrix} \text{vec}(\rho^{(\mathbf{0})}) \\ \text{vec}(\rho^{(\mathbf{e}_1)}) \\ \vdots \end{pmatrix}
+$$
+
+then all of the coupled HEOM equations collapse into one linear ODE:
+
+$$
+\frac{d}{dt}\vec{\rho}(t) = \mathbf{R} \cdot \vec{\rho}(t)
+$$
+
+QuTiP builds this matrix $\mathbf{R}$ internally. The method `solver.rhs(t)` exposes it directly. For a time-independent Hamiltonian, $\mathbf{R}$ does not change, so `solver.rhs(0).full()` gives you the full matrix as a NumPy array.
+
+This is the only QuTiP-specific step in the whole bridge. Once you have $\mathbf{R}$, the rest is standard linear algebra.
+
+## Setup
+
+Standard spin-boson model, same parameters as last week.
+
+```python
+import time
+import numpy as np
+import scipy.sparse as sp
+from scipy.integrate import solve_ivp
+
+from qutip import basis, sigmaz, expect
+from qutip.solver.heom import HEOMSolver, DrudeLorentzBath
+
+epsilon = 1.0
+H = 0.5 * epsilon * sigmaz()
+rho0 = basis(2, 0) * basis(2, 0).dag()
+
+lam = 0.1
+gamma = 0.5
+T = 1.0
+Nk = 8
+Q = sigmaz()
+
+tlist = np.linspace(0, 20, 500)
+depth = 2
+n = 2
+```
+
+## Reference Run
+
+First, run the standard QuTiP solver to get the ground truth.
+
+```python
+bath = DrudeLorentzBath(Q=Q, lam=lam, gamma=gamma, T=T, Nk=Nk)
+solver = HEOMSolver(H, bath, max_depth=depth, options={"progress_bar": False})
+
+n_ados = solver._n_ados
+n_total = n**2 * n_ados
+
+result_qutip = solver.run(rho0, tlist)
+sz_qutip = expect(sigmaz(), result_qutip.states)
+```
+
+At depth 2 with `Nk=8`, this gives 55 ADOs and a state vector of length 220.
+
+## Extracting the RHS Matrix
+
+```python
+RHS = sp.csr_matrix(solver.rhs(0).full())
+```
+
+The matrix is 220×220 with only 598 nonzeros — **98.8% sparse**. This is a direct consequence of the hierarchy structure: each ADO only couples to its immediate neighbors one level up or down. The sparsity is what makes distributed execution with PETSc practical, since the inter-rank communication is bounded rather than all-to-all.
+
+## Building the Initial State Vector
+
+At $t = 0$, only the physical density matrix is nonzero. All ADOs start at zero because there is no bath memory at the initial time.
+
+```python
+rho0_he = np.zeros(n_total, dtype=complex)
+rho0_he[:n**2] = rho0.full().ravel("F")
+```
+
+The column-major flattening (`"F"` order) matches QuTiP's Liouville-space convention, where $\text{vec}(\rho)_{i+nj} = \rho_{ij}$.
+
+## Solving with an External Integrator
+
+With $\mathbf{R}$ and the initial vector in hand, the ODE can be handed to any integrator.
+
+```python
+def rhs_fn(t, y):
+    return RHS @ y
+
+sol = solve_ivp(
+    rhs_fn,
+    t_span=(tlist[0], tlist[-1]),
+    y0=rho0_he,
+    t_eval=tlist,
+    method="RK45",
+    rtol=1e-8,
+    atol=1e-10,
+)
+```
+
+To recover $\rho_S(t)$ at each timestep:
+
+```python
+def extract_rho_s(y):
+    return y[:n**2].reshape((n, n), order="F")
+
+sz_bridge = np.array([
+    extract_rho_s(sol.y[:, i])[0, 0].real - extract_rho_s(sol.y[:, i])[1, 1].real
+    for i in range(len(tlist))
+])
+```
+
+## Validation
+
+```python
+max_err = np.max(np.abs(sz_qutip - sz_bridge))
+print(f"max error vs qutip: {max_err:.2e}")
+```
+
+```text
+max error vs qutip: 0.00e+00
+```
+
+The bridge matches QuTiP at machine precision. The two $\langle \sigma_z \rangle$ curves are numerically identical.
+
+## The PETSc Swap
+
+The entire bridge reduces to one function call:
+
+```python
+def rhs_fn(t, y):
+    return RHS @ y
+```
+
+Replacing this with PETSc means:
+
+- `RHS` becomes a distributed `PETSc.Mat` (each MPI rank owns a row slice)
+- `y` becomes a distributed `PETSc.Vec`
+- `RHS @ y` becomes `A.mult(x, f)`, which handles inter-rank communication automatically
+
+```python
+# petsc equivalent (runs with mpirun -n N python script.py)
+def rhs_petsc(ts, t, x, f):
+    A.mult(x, f)
+
+ts = PETSc.TS().create(comm=PETSc.COMM_WORLD)
+ts.setType(PETSc.TS.Type.RK)
+ts.setRHSFunction(rhs_petsc, f)
+ts.setTime(tlist[0])
+ts.setMaxTime(tlist[-1])
+ts.setTimeStep(tlist[1] - tlist[0])
+ts.setTolerances(rtol=1e-8, atol=1e-10)
+ts.solve(x)
+```
+
+The QuTiP side stays completely untouched. The only thing that changes is what happens after `solver.rhs(0).full()`.
+
+## Why the Sparsity Matters
+
+At depth 2 the matrix is small enough that this is easy. The motivation becomes clearer looking at larger depths:
+
+| Depth | ADOs | State vector | Dense matrix |
+|-------|------|-------------|-------------|
+| 2 | 55 | 220 | 0.8 MB |
+| 3 | 220 | 880 | 12.4 MB |
+| 4 | 715 | 2860 | 130.9 MB |
+| 5 | 2002 | 8008 | 1,026 MB |
+
+At depth 5, storing $\mathbf{R}$ as a dense matrix already requires 1 GB on a single node. In sparse format the same matrix has under 0.1% fill. Distributing those nonzeros across MPI ranks via PETSc's `MatMPIAIJ` is the path to running HEOM at depths that are currently out of reach.
+
+## Next Steps
+
+The next step is getting the PETSc TS call working end-to-end on a single process, then validating that it produces the same result as the SciPy bridge above. After that, the work shifts to the distributed data layout question: which rows of $\mathbf{R}$ live on which MPI rank, and how to minimize inter-rank communication given the hierarchy's coupling structure.
+
+---
+
+*Full notebook: [heom_rhs_bridge.ipynb](heom_rhs_bridge.ipynb)*
