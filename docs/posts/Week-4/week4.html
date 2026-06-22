@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Chinmay Tangal">
+<meta name="dcterms.date" content="2026-06-22">
+
+<title>Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed – Google Summer of Code 2026 | QuTiP | NumFOCUS</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<script src="../../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap-32a889d5c8f61d3f0f5c05f30bc27df8.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+  <script>window.backupDefine = window.define; window.define = undefined;</script><script src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
+  <script>document.addEventListener("DOMContentLoaded", function () {
+ var mathElements = document.getElementsByClassName("math");
+ var macros = [];
+ for (var i = 0; i < mathElements.length; i++) {
+  var texText = mathElements[i].firstChild;
+  if (mathElements[i].tagName == "SPAN") {
+   katex.render(texText.data, mathElements[i], {
+    displayMode: mathElements[i].classList.contains('display'),
+    throwOnError: false,
+    macros: macros,
+    fleqn: false
+   });
+}}});
+  </script>
+  <script>window.define = window.backupDefine; window.backupDefine = undefined;</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css">
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+<link rel="stylesheet" href="../../styles.css">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">Google Summer of Code 2026 | QuTiP | NumFOCUS</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../../index.html"> 
+<span class="menu-text">Home</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../blog.html"> 
+<span class="menu-text">Blog</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../project.html"> 
+<span class="menu-text">Project</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="../../about.html"> 
+<span class="menu-text">About</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <span class="nav-link">
+<span class="menu-text">Chinmay Tangal</span>
+    </span>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/Chinmay-Tangal"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://linkedin.com/in/chinmay-tangal"> <i class="bi bi-linkedin" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#recap-where-we-left-off" id="toc-recap-where-we-left-off" class="nav-link active" data-scroll-target="#recap-where-we-left-off">Recap: Where We Left Off</a></li>
+  <li><a href="#the-roadmap" id="toc-the-roadmap" class="nav-link" data-scroll-target="#the-roadmap">The Roadmap</a></li>
+  <li><a href="#understanding-the-heom-structure" id="toc-understanding-the-heom-structure" class="nav-link" data-scroll-target="#understanding-the-heom-structure">Understanding the HEOM Structure</a>
+  <ul class="collapse">
+  <li><a href="#the-ado-index-dictionary" id="toc-the-ado-index-dictionary" class="nav-link" data-scroll-target="#the-ado-index-dictionary">The ADO Index Dictionary</a></li>
+  </ul></li>
+  <li><a href="#optimal-1-building-r-with-the-dictionary-approach" id="toc-optimal-1-building-r-with-the-dictionary-approach" class="nav-link" data-scroll-target="#optimal-1-building-r-with-the-dictionary-approach">Optimal 1: Building R with the Dictionary Approach</a>
+  <ul class="collapse">
+  <li><a href="#output-and-a-subtle-bug" id="toc-output-and-a-subtle-bug" class="nav-link" data-scroll-target="#output-and-a-subtle-bug">Output and a Subtle Bug</a></li>
+  <li><a href="#runtimes-optimal-1-depth2-4-mpi-ranks" id="toc-runtimes-optimal-1-depth2-4-mpi-ranks" class="nav-link" data-scroll-target="#runtimes-optimal-1-depth2-4-mpi-ranks">Runtimes (Optimal 1, depth=2, 4 MPI ranks)</a></li>
+  </ul></li>
+  <li><a href="#optimal-2-fully-distributed-assembly" id="toc-optimal-2-fully-distributed-assembly" class="nav-link" data-scroll-target="#optimal-2-fully-distributed-assembly">Optimal 2: Fully Distributed Assembly</a>
+  <ul class="collapse">
+  <li><a href="#output-depth8-nk8-4-mpi-ranks" id="toc-output-depth8-nk8-4-mpi-ranks" class="nav-link" data-scroll-target="#output-depth8-nk8-4-mpi-ranks">Output (depth=8, Nk=8, 4 MPI ranks)</a></li>
+  <li><a href="#load-balance" id="toc-load-balance" class="nav-link" data-scroll-target="#load-balance">Load Balance</a></li>
+  </ul></li>
+  <li><a href="#scaling-why-this-matters" id="toc-scaling-why-this-matters" class="nav-link" data-scroll-target="#scaling-why-this-matters">Scaling: Why This Matters</a></li>
+  <li><a href="#key-insights-from-this-week" id="toc-key-insights-from-this-week" class="nav-link" data-scroll-target="#key-insights-from-this-week">Key Insights from This Week</a></li>
+  <li><a href="#complete-runtime-summary" id="toc-complete-runtime-summary" class="nav-link" data-scroll-target="#complete-runtime-summary">Complete Runtime Summary</a></li>
+  <li><a href="#next-steps" id="toc-next-steps" class="nav-link" data-scroll-target="#next-steps">Next Steps</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed</h1>
+  <div class="quarto-categories">
+    <div class="quarto-category">GSoC 2026</div>
+    <div class="quarto-category">Week 4</div>
+    <div class="quarto-category">QuTiP</div>
+    <div class="quarto-category">HEOM</div>
+    <div class="quarto-category">PETSc</div>
+    <div class="quarto-category">MPI</div>
+    <div class="quarto-category">ODE</div>
+  </div>
+  </div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Chinmay Tangal </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">June 22, 2026</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>Week 4 was the most technically involved week so far. The goal shifted from <em>using</em> QuTiP’s HEOM solver to <em>understanding it well enough to replace its internals</em> — rebuilding the RHS matrix from first principles, assembling it directly into PETSc, and finally distributing that assembly across MPI ranks so that the matrix never has to exist in full on any single machine.</p>
+<section id="recap-where-we-left-off" class="level2">
+<h2 class="anchored" data-anchor-id="recap-where-we-left-off">Recap: Where We Left Off</h2>
+<p>By the end of Week 3, the pipeline looked like this:</p>
+<blockquote class="blockquote">
+<p>QuTiP builds <strong>R</strong> → extract with <code>solver.rhs(0).full()</code> → hand to PETSc TS → solve</p>
+</blockquote>
+<p>That worked and gave a 16× speedup over QuTiP at small scale. But the critical bottleneck was still there: QuTiP assembles the entire <strong>R</strong> matrix on a single process before we even touch PETSc. For large hierarchy depths, this single-process assembly is what kills scalability — not the ODE solve.</p>
+<p>This week’s work addresses that bottleneck directly.</p>
+</section>
+<section id="the-roadmap" class="level2">
+<h2 class="anchored" data-anchor-id="the-roadmap">The Roadmap</h2>
+<p>The approach this week followed two distinct tracks, called <strong>Optimal 1</strong> and <strong>Optimal 2</strong> in the diagram below.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="1782131592237_image.png" class="img-fluid figure-img"></p>
+<figcaption>Pipeline overview showing all tracks from baseline to fully distributed</figcaption>
+</figure>
+</div>
+<p><strong>Optimal 1 (Hybrid):</strong> Build <strong>R</strong> ourselves using QuTiP’s internal dictionary approach, assemble into PETSc on a single process, solve with PETSc TS + MPI. The assembly is still serial, but the construction logic is now fully transparent and under our control — no longer a black box.</p>
+<p><strong>Optimal 2 (Fully distributed):</strong> Each MPI rank builds only the rows of <strong>R</strong> that it owns. The matrix is never assembled on a single machine. Assembly and solve are both distributed from the start.</p>
+</section>
+<section id="understanding-the-heom-structure" class="level2">
+<h2 class="anchored" data-anchor-id="understanding-the-heom-structure">Understanding the HEOM Structure</h2>
+<p>Before writing any code, it is worth being precise about what <strong>R</strong> actually contains, because this is what the from-scratch construction must reproduce.</p>
+<p>The full HEOM state vector is:</p>
+<p><span class="math display">
+\vec{\rho} = \begin{pmatrix}
+\text{vec}(\rho^{(\mathbf{0})}) \\
+\text{vec}(\rho^{(\mathbf{e}_1)}) \\
+\text{vec}(\rho^{(\mathbf{e}_2)}) \\
+\vdots
+\end{pmatrix}
+</span></p>
+<p>where <span class="math inline">\rho^{(\mathbf{n})}</span> is the ADO with multi-index <span class="math inline">\mathbf{n} = (n_1, n_2, \ldots, n_K)</span> and <span class="math inline">n_k</span> counts how many times the <span class="math inline">k</span>-th bath exponential mode has been “excited.” The matrix <strong>R</strong> is block structured: each block corresponds to a pair of ADOs, and the blocks are sparse because each ADO only couples to its immediate neighbours (one tier up or down, per Matsubara mode).</p>
+<p>Concretely, for each ADO at multi-index <span class="math inline">\mathbf{n}</span>:</p>
+<p><strong>Diagonal block</strong> — system Liouvillian plus ADO decay: <span class="math display">
+\mathcal{L}_{\text{sys}} - \left(\sum_k n_k \nu_k\right) \mathbf{I}
+</span></p>
+<p>where <span class="math inline">\mathcal{L}_{\text{sys}} = -i[H, \cdot]</span> is the system Liouvillian in superoperator form, and <span class="math inline">\nu_k</span> are the bath exponent frequencies (Matsubara rates).</p>
+<p><strong>Coupling down</strong> (to ADO <span class="math inline">\mathbf{n} - \mathbf{e}_k</span>, one tier below): <span class="math display">
+-i \cdot n_k \cdot \left[c_k \left(Q \rho - \rho Q^\dagger \right)\right]
+</span></p>
+<p>with <span class="math inline">c_k</span> the bath correlation coefficient for mode <span class="math inline">k</span>. For RI-type exponents (which arise in the Drude-Lorentz bath), there is an additional term involving the imaginary part coefficient <span class="math inline">c_k^{(2)}</span>: <span class="math display">
+n_k \left[-i c_k (\mathcal{L}Q - \mathcal{R}Q) + c_k^{(2)} (\mathcal{L}Q + \mathcal{R}Q)\right]
+</span> where <span class="math inline">\mathcal{L}Q \cdot = Q\rho</span> and <span class="math inline">\mathcal{R}Q \cdot = \rho Q</span> are the left- and right-multiplication superoperators.</p>
+<p><strong>Coupling up</strong> (to ADO <span class="math inline">\mathbf{n} + \mathbf{e}_k</span>, one tier above): <span class="math display">
+-i \left(Q\rho - \rho Q\right)
+</span></p>
+<p>Notice that the coupling-up term does <strong>not</strong> depend on <span class="math inline">c_k</span>. This is a key structural feature of the HEOM — the bath coefficients appear only in the downward coupling.</p>
+<section id="the-ado-index-dictionary" class="level3">
+<h3 class="anchored" data-anchor-id="the-ado-index-dictionary">The ADO Index Dictionary</h3>
+<p>QuTiP v5 organises all of this via a <code>HierarchyADOs</code> object attached to the solver as <code>solver.ados</code>. The critical attributes are:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>ados.labels      <span class="co"># list of ADO multi-index tuples, e.g. [(0,0,0), (1,0,0), ...]</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>ados.idx(label)  <span class="co"># integer position of a label in the big matrix</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>ados.<span class="bu">next</span>(label, k)  <span class="co"># label one step UP in mode k (None if at max depth)</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>ados.prev(label, k)  <span class="co"># label one step DOWN in mode k (None if at zero)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>ados.vk          <span class="co"># list of nu_k values</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>ados.ck          <span class="co"># list of c_k values</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>ados.ck2         <span class="co"># list of c_k^(2) values (None for pure-R exponents)</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>ados.exponents   <span class="co"># list of BathExponent objects with .type, .ck, .vk, .ck2, .Q</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The <code>next</code> and <code>prev</code> methods encode the hierarchy connectivity. When you call <code>ados.next(label, k)</code>, you get the label of the ADO that is one level higher in mode <span class="math inline">k</span>, or <code>None</code> if the depth ceiling is reached. This is exactly what you need to know which (row, column) block pairs to fill in <strong>R</strong>.</p>
+</section>
+</section>
+<section id="optimal-1-building-r-with-the-dictionary-approach" class="level2">
+<h2 class="anchored" data-anchor-id="optimal-1-building-r-with-the-dictionary-approach">Optimal 1: Building R with the Dictionary Approach</h2>
+<p>The construction loop in <code>heom_optimal1.py</code> mirrors QuTiP’s internal <code>_rhs()</code> method exactly, but using scipy sparse matrices instead of QuTiP’s internal data types:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>rows, cols, data <span class="op">=</span> [], [], []</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> add_block(i_block, j_block, mat):</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    r0, c0 <span class="op">=</span> i_block <span class="op">*</span> Nsup, j_block <span class="op">*</span> Nsup</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    coo <span class="op">=</span> sp.csr_matrix(mat).tocoo()</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> r, c, v <span class="kw">in</span> <span class="bu">zip</span>(coo.row, coo.col, coo.data):</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>        rows.append(r0 <span class="op">+</span> r)</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        cols.append(c0 <span class="op">+</span> c)</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        data.append(v)</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> idx, label <span class="kw">in</span> <span class="bu">enumerate</span>(ado_labels):</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    label <span class="op">=</span> <span class="bu">list</span>(label)</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Diagonal: system Liouvillian + ADO decay</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    decay <span class="op">=</span> <span class="bu">sum</span>(label[k] <span class="op">*</span> exponents[k].vk <span class="cf">for</span> k <span class="kw">in</span> <span class="bu">range</span>(<span class="bu">len</span>(exponents)))</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    add_block(idx, idx, L_sys <span class="op">-</span> decay <span class="op">*</span> sp.eye(Nsup, <span class="bu">format</span><span class="op">=</span><span class="st">"csr"</span>))</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> k, ex <span class="kw">in</span> <span class="bu">enumerate</span>(exponents):</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        nk <span class="op">=</span> label[k]</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Coupling DOWN (to tier below)</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> nk <span class="op">&gt;=</span> <span class="dv">1</span>:</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>            lbl_down <span class="op">=</span> <span class="bu">tuple</span>(label[j] <span class="op">-</span> <span class="bu">int</span>(j <span class="op">==</span> k) <span class="cf">for</span> j <span class="kw">in</span> <span class="bu">range</span>(<span class="bu">len</span>(exponents)))</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> lbl_down <span class="kw">in</span> label_to_idx:</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>                add_block(idx, label_to_idx[lbl_down], <span class="op">-</span><span class="ot">1j</span> <span class="op">*</span> nk <span class="op">*</span> comm_Q)</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Coupling UP (to tier above)</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="bu">sum</span>(label) <span class="op">&lt;</span> depth:</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>            lbl_up <span class="op">=</span> <span class="bu">tuple</span>(label[j] <span class="op">+</span> <span class="bu">int</span>(j <span class="op">==</span> k) <span class="cf">for</span> j <span class="kw">in</span> <span class="bu">range</span>(<span class="bu">len</span>(exponents)))</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> lbl_up <span class="kw">in</span> label_to_idx:</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>                add_block(idx, label_to_idx[lbl_up], <span class="op">-</span><span class="ot">1j</span> <span class="op">*</span> (ck <span class="op">*</span> Q_l <span class="op">-</span> np.conj(ck) <span class="op">*</span> Q_r))</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>RHS_opt1 <span class="op">=</span> sp.csr_matrix((data, (rows, cols)), shape<span class="op">=</span>(n_total, n_total), dtype<span class="op">=</span><span class="bu">complex</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="output-and-a-subtle-bug" class="level3">
+<h3 class="anchored" data-anchor-id="output-and-a-subtle-bug">Output and a Subtle Bug</h3>
+<pre class="text"><code>ADOs: 55   state-vector length: 220
+RHS shape: (220, 220)   nnz: 578
+max |RHS_opt1 - RHS_qutip| = 3.98e+00
+max |err| vs QuTiP ref    : 0.00e+00</code></pre>
+<p>There is an interesting tension in these two lines. The RHS matrix differs from QuTiP’s by up to 3.98 in maximum entry, yet the solution trajectory is exact to machine precision. This is not a coincidence — it reveals something important about the coupling-up formula.</p>
+<p>The correct coupling-up operator is: <span class="math display">
+-i(Q\rho - \rho Q)
+</span> which does not involve <span class="math inline">c_k</span> at all. The code above used <span class="math inline">-i(c_k Q\rho - c_k^* \rho Q)</span> instead, which is wrong for modes where <span class="math inline">c_k \neq 1</span>. However, for the specific initial state <span class="math inline">\rho_0 = |0\rangle\langle 0|</span> (which is diagonal), the coupling-up operator maps the initial state to zero:</p>
+<p><span class="math display">
+(Q\rho_0 - \rho_0 Q)_{ij} = (\sigma_z)_{ii}\rho_{ij} - \rho_{ij}(\sigma_z)_{jj}
+</span></p>
+<p>Since <span class="math inline">\rho_0</span> is diagonal, the off-diagonal elements are zero, and only the diagonal blocks of <span class="math inline">Q\rho - \rho Q</span> are nonzero. For <span class="math inline">\sigma_z</span> as the coupling operator, these diagonal blocks are also zero. So both the correct and incorrect coupling-up formulas give the same result for this specific initial condition.</p>
+<p><strong>The fix</strong> is to use <span class="math inline">-i \cdot \text{comm}_Q</span> (independent of <span class="math inline">c_k</span>) for the coupling-up term, which is what Optimal 2 and QuTiP’s <code>_grad_next_bosonic</code> both do. The Optimal 1 result is still <em>correct for this test case</em>, but would give wrong answers for a non-diagonal initial state.</p>
+</section>
+<section id="runtimes-optimal-1-depth2-4-mpi-ranks" class="level3">
+<h3 class="anchored" data-anchor-id="runtimes-optimal-1-depth2-4-mpi-ranks">Runtimes (Optimal 1, depth=2, 4 MPI ranks)</h3>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Runtime</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>QuTiP baseline</td>
+<td>0.048 s</td>
+</tr>
+<tr class="even">
+<td>SciPy RK45 (our RHS)</td>
+<td>0.021 s</td>
+</tr>
+<tr class="odd">
+<td>PETSc TS + 4 MPI ranks</td>
+<td><strong>0.003 s</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The PETSc solve is <strong>16× faster than QuTiP</strong> and <strong>7× faster than scipy</strong> on this small problem. At this scale the problem is too small to show the real benefit — the point is that the same code will scale to much larger problems without modification.</p>
+</section>
+</section>
+<section id="optimal-2-fully-distributed-assembly" class="level2">
+<h2 class="anchored" data-anchor-id="optimal-2-fully-distributed-assembly">Optimal 2: Fully Distributed Assembly</h2>
+<p>In Optimal 1, the construction of <code>RHS_opt1</code> still happens on a single process before being loaded into PETSc. For large hierarchy depths this assembly becomes the bottleneck.</p>
+<p>Optimal 2 eliminates this bottleneck. Each MPI rank asks PETSc what rows it owns (<code>A.getOwnershipRange()</code>), then builds only those rows locally — the full matrix never exists on any single machine.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>A <span class="op">=</span> PETSc.Mat().createAIJ(size<span class="op">=</span>(n_total, n_total), comm<span class="op">=</span>comm_petsc)</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>A.setUp()</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>rstart, rend <span class="op">=</span> A.getOwnershipRange()</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> ado_idx, label <span class="kw">in</span> <span class="bu">enumerate</span>(ado_labels):</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    row_off <span class="op">=</span> ado_idx <span class="op">*</span> Nsup</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ... compute diagonal and off-diagonal blocks ...</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> local_r <span class="kw">in</span> <span class="bu">range</span>(Nsup):</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        gr <span class="op">=</span> row_off <span class="op">+</span> local_r</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> rstart <span class="op">&lt;=</span> gr <span class="op">&lt;</span> rend:   <span class="co"># only fill rows this rank owns</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>            A.setValue(gr, gc, gv)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>This is the key structural change: the <code>if rstart &lt;= gr &lt; rend</code> guard means each rank performs exactly its share of the work, with no redundant computation and no global gather of the matrix.</p>
+<section id="output-depth8-nk8-4-mpi-ranks" class="level3">
+<h3 class="anchored" data-anchor-id="output-depth8-nk8-4-mpi-ranks">Output (depth=8, Nk=8, 4 MPI ranks)</h3>
+<pre class="text"><code>K = 9 exponential terms
+ADOs: 24,310   total DOF: 97,240
+
+Rank 0: rows 0–24309      (177,613 nonzeros)
+Rank 1: rows 24310–48619  (172,145 nonzeros)
+Rank 2: rows 48620–72929  ( 77,087 nonzeros)
+Rank 3: rows 72930–97239  ( 82,233 nonzeros)
+
+PETSc+MPI distributed runtime: 0.088 s
+&lt;sz&gt; at t_end: 1.000000</code></pre>
+<p>Total nonzeros across all ranks: <strong>509,078</strong> in a 97,240×97,240 matrix. That is a fill fraction of <strong>0.0054%</strong> — the matrix is extremely sparse.</p>
+<p>The dense equivalent would require: <span class="math display">
+97{,}240^2 \times 16 \text{ bytes} \approx 151 \text{ GB}
+</span> which would be impossible to store on a single machine, let alone solve. The sparse distributed approach stores only the 509,078 nonzeros, split evenly across ranks.</p>
+</section>
+<section id="load-balance" class="level3">
+<h3 class="anchored" data-anchor-id="load-balance">Load Balance</h3>
+<p>One thing the output reveals is a load imbalance across ranks:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Rank</th>
+<th>Rows</th>
+<th>Nonzeros</th>
+<th>Avg nnz/row</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>0</td>
+<td>24,310</td>
+<td>177,613</td>
+<td>7.3</td>
+</tr>
+<tr class="even">
+<td>1</td>
+<td>24,310</td>
+<td>172,145</td>
+<td>7.1</td>
+</tr>
+<tr class="odd">
+<td>2</td>
+<td>24,310</td>
+<td>77,087</td>
+<td>3.2</td>
+</tr>
+<tr class="even">
+<td>3</td>
+<td>24,310</td>
+<td>82,233</td>
+<td>3.4</td>
+</tr>
+</tbody>
+</table>
+<p>Ranks 0 and 1 own roughly <strong>twice the work</strong> of ranks 2 and 3. This is because PETSc assigns rows by contiguous index, and the lower-tier ADOs (small <span class="math inline">\sum n_k</span>) are indexed first. Lower-tier ADOs have more neighbours — both upward and downward coupling terms — so their rows are denser. The upper-tier ADOs (high <span class="math inline">\sum n_k</span>, near the truncation boundary) have fewer neighbours because some upward couplings are cut off by the depth ceiling.</p>
+<p>This is a known issue with naive row-based partitioning of hierarchy matrices. A better partitioning would assign rows by tier level to equalise work per rank. That is a future optimisation.</p>
+</section>
+</section>
+<section id="scaling-why-this-matters" class="level2">
+<h2 class="anchored" data-anchor-id="scaling-why-this-matters">Scaling: Why This Matters</h2>
+<p>The table below shows why distributed assembly is not optional for large depths:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Depth</th>
+<th>ADOs</th>
+<th>DOF</th>
+<th>Dense matrix</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>2</td>
+<td>55</td>
+<td>220</td>
+<td>0.8 MB</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td>715</td>
+<td>2,860</td>
+<td>130.9 MB</td>
+</tr>
+<tr class="odd">
+<td>6</td>
+<td>5,005</td>
+<td>20,020</td>
+<td>6.4 GB</td>
+</tr>
+<tr class="even">
+<td>8</td>
+<td>24,310</td>
+<td>97,240</td>
+<td><strong>151 GB</strong></td>
+</tr>
+<tr class="odd">
+<td>10</td>
+<td>92,378</td>
+<td>369,512</td>
+<td>2.2 TB</td>
+</tr>
+</tbody>
+</table>
+<p><em>(K=9, n=2, using complex128 = 16 bytes per entry)</em></p>
+<p>At depth 6, the dense matrix already exceeds the RAM of a typical workstation. At depth 8, Optimal 2 handled it in <strong>0.088 seconds</strong> across 4 ranks using only 509,078 nonzeros. At depth 10, distributed sparse assembly is the only feasible approach — the dense matrix would be 2.2 TB.</p>
+</section>
+<section id="key-insights-from-this-week" class="level2">
+<h2 class="anchored" data-anchor-id="key-insights-from-this-week">Key Insights from This Week</h2>
+<p><strong>1. The coupling-up term does not involve bath coefficients.</strong> QuTiP’s <code>_grad_next_bosonic</code> always computes <span class="math inline">-i(Q\rho - \rho Q)</span> regardless of exponent type. The bath coefficients <span class="math inline">c_k</span> only appear in the coupling-down term. This is a consequence of the HEOM derivation: the upward coupling represents the action of the bath on the system, while the downward coupling represents feedback from the higher-tier ADOs back into the dynamics.</p>
+<p><strong>2. The RHS is block-sparse by construction, not by accident.</strong> Each ADO label <span class="math inline">\mathbf{n}</span> connects only to <span class="math inline">\mathbf{n} \pm \mathbf{e}_k</span> for each <span class="math inline">k</span>. The number of nonzero blocks per row is bounded by <span class="math inline">2K</span> (two neighbours per mode), giving an average of roughly <span class="math inline">2K \cdot n^2</span> nonzeros per ADO block row — independent of the total system size.</p>
+<p><strong>3. Diagonal initial states hide bugs.</strong> When <span class="math inline">\rho_0</span> is diagonal (like <span class="math inline">|0\rangle\langle 0|</span>), the commutator <span class="math inline">[Q, \rho_0]</span> vanishes for <span class="math inline">Q = \sigma_z</span>, making the first timestep of the solution insensitive to errors in the coupling-up term. Always validate with a non-diagonal initial state (e.g.&nbsp;<span class="math inline">\rho_0 = |+\rangle\langle +|</span>) to catch this class of bug.</p>
+<p><strong>4. PETSc’s ownership range is the natural parallelism primitive.</strong> <code>A.getOwnershipRange()</code> returns <code>(rstart, rend)</code> — the global row indices this rank is responsible for. Building only those rows locally and calling <code>A.setValue()</code> is all that is needed. PETSc handles the communication transparently during assembly and matrix-vector products.</p>
+<p><strong>5. Load balance depends on the ADO ordering.</strong> The current implementation assigns contiguous rows to each rank. Since lower tiers are denser, this leads to 2× load imbalance between early and late ranks. Tier-aware partitioning (interleaving rows from different tiers) would equalise this at the cost of non-contiguous ownership, which PETSc supports but requires more careful index management.</p>
+</section>
+<section id="complete-runtime-summary" class="level2">
+<h2 class="anchored" data-anchor-id="complete-runtime-summary">Complete Runtime Summary</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 14%">
+<col style="width: 26%">
+<col style="width: 16%">
+<col style="width: 14%">
+<col style="width: 10%">
+<col style="width: 18%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Track</th>
+<th>Who builds R</th>
+<th>Solver</th>
+<th>Depth</th>
+<th>DOF</th>
+<th>Runtime</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Baseline</td>
+<td>QuTiP (serial)</td>
+<td>QuTiP/scipy</td>
+<td>2</td>
+<td>220</td>
+<td>0.165 s</td>
+</tr>
+<tr class="even">
+<td>Validation</td>
+<td>QuTiP (serial)</td>
+<td>SciPy RK45</td>
+<td>2</td>
+<td>220</td>
+<td>0.087 s</td>
+</tr>
+<tr class="odd">
+<td>Brute-force</td>
+<td>QuTiP (serial)</td>
+<td>PETSc TS, 1 rank</td>
+<td>2</td>
+<td>220</td>
+<td>0.019 s</td>
+</tr>
+<tr class="even">
+<td><strong>Optimal 1</strong></td>
+<td><strong>Dict (serial)</strong></td>
+<td><strong>PETSc TS, 4 ranks</strong></td>
+<td><strong>2</strong></td>
+<td><strong>220</strong></td>
+<td><strong>0.003 s</strong></td>
+</tr>
+<tr class="odd">
+<td><strong>Optimal 2</strong></td>
+<td><strong>PETSc+MPI (distributed)</strong></td>
+<td><strong>PETSc TS, 4 ranks</strong></td>
+<td><strong>8</strong></td>
+<td><strong>97,240</strong></td>
+<td><strong>0.088 s</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The depth-8 result (Optimal 2) is the headline number: a 97,240-dimensional sparse ODE solved in 88 milliseconds on 4 cores, using a matrix that would require 151 GB in dense form. The matrix was assembled in a distributed fashion from scratch, bypassing QuTiP entirely.</p>
+</section>
+<section id="next-steps" class="level2">
+<h2 class="anchored" data-anchor-id="next-steps">Next Steps</h2>
+<p>The immediate priorities for next week are:</p>
+<ol type="1">
+<li><p><strong>Fix the coupling-up bug in Optimal 1</strong> — use <span class="math inline">-i \cdot \text{comm}_Q</span> instead of <span class="math inline">-i(c_k Q_l - c_k^* Q_r)</span>, and validate with a non-diagonal initial state.</p></li>
+<li><p><strong>Implement tier-aware partitioning</strong> — assign rows from each tier to ranks in a round-robin fashion to equalise the nonzero-per-rank distribution.</p></li>
+<li><p><strong>Scaling benchmarks</strong> — run Optimal 2 at depths 4, 6, 8, 10 and plot runtime vs depth and runtime vs number of MPI ranks to quantify strong and weak scaling.</p></li>
+<li><p><strong>Monitor function for trajectory</strong> — the current PETSc TS setup only returns the final state. Adding a monitor function will allow recording <span class="math inline">\langle\sigma_z\rangle(t)</span> at each timestep for full trajectory validation.</p></li>
+</ol>
+<hr>
+<p><em>Source files: <a href="heom_optimal1.py">heom_optimal1.py</a></em>, <a href="heom_optimal2.py">heom_optimal2.py</a>*</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

@@ -42,230 +42,6 @@
     "text": "Links\nStudent: GitHub | Email\nProposal: GSoC 2026 Project Page"
   },
   {
-    "objectID": "posts/Week-3/heom_rhs_bridge.html",
-    "href": "posts/Week-3/heom_rhs_bridge.html",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "",
-    "text": "import time\nimport numpy as np\nimport scipy.sparse as sp\nfrom scipy.integrate import solve_ivp\nimport matplotlib.pyplot as plt\n\nfrom qutip import basis, sigmaz, expect\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\n\n# system\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\n# bath\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\nQ = sigmaz()\n\ntlist = np.linspace(0, 20, 500)\ndepth = 2\nn = 2\n\n\n# reference run using the standard qutip solver\nbath = DrudeLorentzBath(Q=Q, lam=lam, gamma=gamma, T=T, Nk=Nk)\nsolver = HEOMSolver(H, bath, max_depth=depth, options={\"progress_bar\": False})\n\nn_ados = solver._n_ados\nn_total = n**2 * n_ados\n\nprint(f\"ADOs: {n_ados}\")\nprint(f\"state vector length: {n_total}\")\n\nt0 = time.perf_counter()\nresult_qutip = solver.run(rho0, tlist)\nt_qutip = time.perf_counter() - t0\n\nprint(f\"qutip runtime: {t_qutip:.3f} s\")\n\nsz_qutip = expect(sigmaz(), result_qutip.states)\n\n\n# extract the RHS matrix\n# solver.rhs(0) returns the full HEOM RHS as a qutip Qobj\n# .full() converts it to a numpy array\n# for a time-independent system this matrix does not change, so rhs(0) is enough\nRHS = sp.csr_matrix(solver.rhs(0).full())\n\nprint(f\"RHS shape: {RHS.shape}\")\nprint(f\"non-zeros: {RHS.nnz} out of {n_total**2} ({100*RHS.nnz/n_total**2:.1f}%)\")\n\n\n# build the extended initial state vector\n# HEOM state = [vec(rho_s), 0, 0, ...] where all ADOs start at zero\n# vec uses column-major order (qutip's convention)\nrho0_he = np.zeros(n_total, dtype=complex)\nrho0_he[:n**2] = rho0.full().ravel(\"F\")\n\nprint(f\"first 4 entries: {rho0_he[:4].real}  (should be [1, 0, 0, 0])\")\n\n\n# solve the same ODE using an external integrator\n# this is the part that will be replaced by petsc later\n# the ODE is: d/dt rho_he = RHS @ rho_he\n\ndef rhs_fn(t, y):\n    return RHS @ y\n\nt0 = time.perf_counter()\nsol = solve_ivp(\n    rhs_fn,\n    t_span=(tlist[0], tlist[-1]),\n    y0=rho0_he,\n    t_eval=tlist,\n    method=\"RK45\",\n    rtol=1e-8,\n    atol=1e-10,\n)\nt_bridge = time.perf_counter() - t0\n\nprint(f\"bridge runtime: {t_bridge:.3f} s\")\nprint(f\"success: {sol.success}\")\n\n\n# extract rho_s(t) from the bridge solution\n# first n^2 entries of each column are vec(rho_s), reshape back to n x n\n\ndef extract_rho_s(y):\n    return y[:n**2].reshape((n, n), order=\"F\")\n\nsz_bridge = np.array([\n    extract_rho_s(sol.y[:, i])[0, 0].real - extract_rho_s(sol.y[:, i])[1, 1].real\n    for i in range(len(tlist))\n])\n\n\n# validation\nmax_err = np.max(np.abs(sz_qutip - sz_bridge))\nprint(f\"max error vs qutip: {max_err:.2e}\")\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\naxes[0].plot(tlist, sz_qutip, lw=2, label=\"QuTiP\")\naxes[0].plot(tlist, sz_bridge, lw=1.5, ls=\"--\", label=\"bridge (scipy RK45)\")\naxes[0].set_xlabel(\"time\")\naxes[0].set_ylabel(r\"$\\langle \\sigma_z \\rangle$\")\naxes[0].legend()\naxes[0].grid(alpha=0.3)\n\naxes[1].semilogy(tlist, np.abs(sz_qutip - sz_bridge) + 1e-16)\naxes[1].set_xlabel(\"time\")\naxes[1].set_ylabel(\"pointwise error\")\naxes[1].grid(alpha=0.3)\n\nplt.tight_layout()\nplt.savefig(\"bridge_validation.png\", dpi=150, bbox_inches=\"tight\")\nplt.show()\n\n\n# petsc bridge\n# swap USE_PETSC to True after installing petsc4py\n# install: conda install -c conda-forge petsc petsc4py mpi4py\n\nUSE_PETSC = False\n\nif USE_PETSC:\n    import petsc4py\n    petsc4py.init()\n    from petsc4py import PETSc\n\n    # build petsc matrix from CSR data\n    A = PETSc.Mat().createAIJ(\n        size=(n_total, n_total),\n        csr=(RHS.indptr, RHS.indices, RHS.data),\n        comm=PETSc.COMM_WORLD,\n    )\n    A.assemblyBegin()\n    A.assemblyEnd()\n\n    x = A.createVecRight()\n    f = A.createVecLeft()\n    x.setValues(range(n_total), rho0_he)\n    x.assemblyBegin()\n    x.assemblyEnd()\n\n    def rhs_petsc(ts, t, x, f):\n        A.mult(x, f)\n\n    ts = PETSc.TS().create(comm=PETSc.COMM_WORLD)\n    ts.setType(PETSc.TS.Type.RK)\n    ts.setRHSFunction(rhs_petsc, f)\n    ts.setTime(tlist[0])\n    ts.setMaxTime(tlist[-1])\n    ts.setTimeStep(tlist[1] - tlist[0])\n    ts.setTolerances(rtol=1e-8, atol=1e-10)\n    ts.setFromOptions()\n\n    t0 = time.perf_counter()\n    ts.solve(x)\n    t_petsc = time.perf_counter() - t0\n\n    y_final = np.array(x.getArray())\n    rho_final = extract_rho_s(y_final)\n    sz_final = rho_final[0, 0].real - rho_final[1, 1].real\n\n    print(f\"petsc runtime: {t_petsc:.3f} s\")\n    print(f\"&lt;sigma_z&gt; at t_final: {sz_final:.6f}\")\n    print(f\"qutip reference:      {sz_qutip[-1]:.6f}\")\nelse:\n    print(\"petsc bridge skipped. set USE_PETSC = True to run.\")"
-  },
-  {
-    "objectID": "posts/Week-1/week1.html",
-    "href": "posts/Week-1/week1.html",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "",
-    "text": "Coding phase has started. Week 1 was less about writing solver code and more about actually getting comfortable with the tools I’ll be using — MPI and PETSc. Worked through a set of exercises, each one building on the last."
-  },
-  {
-    "objectID": "posts/Week-1/week1.html#starting-with-mpi",
-    "href": "posts/Week-1/week1.html#starting-with-mpi",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "Starting with MPI",
-    "text": "Starting with MPI\nStarted with the basics — splitting work across processes, each rank handles its chunk, gather results back to rank 0.\nfrom mpi4py import MPI\n\ncomm = MPI.COMM_WORLD \nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nchunk = 100 // size  \nstart = rank * chunk + 1   \nend   = start + chunk\n\nlocal_results = [(n, n * n) for n in range(start, end)] \n\nprint(f\"Rank {rank}: computed {start}² to {end-1}²\")\n\nall_results = comm.gather(local_results, root=0)\n\nif rank == 0:\n    flat = [item for sublist in all_results for item in sublist]\n    print(f\"\\nRank 0 has all {len(flat)} results\")\n    for n, sq in flat[:5]:\n        print(f\"  {n}² = {sq}\")\n    print(\"  ...\")\nSimple, but it made the mental model concrete."
-  },
-  {
-    "objectID": "posts/Week-1/week1.html#petsc-distributed-vectors",
-    "href": "posts/Week-1/week1.html#petsc-distributed-vectors",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "PETSc Distributed Vectors",
-    "text": "PETSc Distributed Vectors\nNext step was PETSc. Created a distributed vector, filled it with values, verified each rank owned the right slice.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nx = PETSc.Vec().create(comm=PETSc.COMM_WORLD)\nx.setSizes(100)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor i in range(lo, hi):\n    x.setValue(i, (i + 1) ** 2)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\nvals = x.getValues(range(lo, hi))\nprint(f\"Rank {rank} owns indices {lo}–{hi-1}, first={int(vals[0])}, last={int(vals[-1])}\")\n\ntotal = x.sum()\nif rank == 0:\n    print(f\"\\nSum of all squares = {int(total)}\")\n    print(f\"Expected           = {sum(i*i for i in range(1,101))}\")\n\nx.destroy()\ngetOwnershipRange() is the pattern I’ll be using constantly — each rank knows which slice of the global data it owns."
-  },
-  {
-    "objectID": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
-    "href": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "Distributed Matrix-Vector Multiplication",
-    "text": "Distributed Matrix-Vector Multiplication\nBuilt a tridiagonal matrix distributed across ranks and multiplied it by a distributed vector. This is roughly the shape of what the HEOM RHS computation will look like.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nglobal_size = 100\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, float(i))\nx.assemblyBegin()\nx.assemblyEnd()\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setFromOptions()\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    if i &gt; 0:\n        A.setValue(i, i - 1, -1.0)\n    A.setValue(i, i, 2.0)\n    if i &lt; global_size - 1:\n        A.setValue(i, i + 1, -1.0)\n\nA.assemblyBegin()\nA.assemblyEnd()\n\ny = PETSc.Vec().create(comm=comm)\ny.setSizes(global_size)\ny.setFromOptions()\ny.setUp()\n\nA.mult(x, y)\n\ny_lo, y_hi = y.getOwnershipRange()\nlocal_vals = y.getValues(range(y_lo, y_hi))\nprint(f\"Rank {rank} checked indices {y_lo} to {y_hi-1}.\")\nprint(f\"  -&gt; Index {y_lo} value: {local_vals[0]}\")\nprint(f\"  -&gt; Index {y_hi-1} value: {local_vals[-1]}\")\n\nx.destroy()\ny.destroy()\nA.destroy()\nThe assembly step is where MPI communication happens across rank boundaries — PETSc handles that internally."
-  },
-  {
-    "objectID": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
-    "href": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "Multi-Index Mapping (The HEOM Layout)",
-    "text": "Multi-Index Mapping (The HEOM Layout)\nThis one was directly relevant to the project. In HEOM, auxiliary density matrices are labeled by multi-indices — (0,0), (1,0), (0,1), etc. PETSc only understands flat linear indices, so I needed a mapping function that converts hierarchy coordinates into a 1D index.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nGRID_DIM = 5\nglobal_size = GRID_DIM * GRID_DIM\n\ndef get_flat_index(n1, n2):\n    return n1 * GRID_DIM + n2\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor n1 in range(GRID_DIM):\n    for n2 in range(GRID_DIM):\n        flat_idx = get_flat_index(n1, n2)\n        if lo &lt;= flat_idx &lt; hi:\n            physics_value = float(n1 * 10 + n2)\n            x.setValue(flat_idx, physics_value)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\ntarget_idx = get_flat_index(3, 2)\nif lo &lt;= target_idx &lt; hi:\n    val = x.getValues([target_idx])[0]\n    print(f\"Rank {rank} owns flat index {target_idx} (grid (3,2)). Value: {val}\")\n\nx.destroy()\nThis mapping is going to be central to the actual implementation."
-  },
-  {
-    "objectID": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
-    "href": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
-    "title": "Week 1: Getting Hands-On with MPI and PETSc",
-    "section": "ODE Integration with PETSc TS",
-    "text": "ODE Integration with PETSc TS\nLast exercise — hooking up PETSc’s time-stepper (TS) to actually solve an ODE in parallel. Used a simple decay system dx/dt = -0.5x so I could verify the output analytically.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nglobal_size = 10\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    A.setValue(i, i, -0.5)\nA.assemblyBegin()\nA.assemblyEnd()\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setUp()\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, 10.0)\nx.assemblyBegin()\nx.assemblyEnd()\n\ndef rhs_function(ts, t, vec_x, vec_f):\n    A.mult(vec_x, vec_f)\n\nts = PETSc.TS().create(comm=comm)\nts.setProblemType(ts.ProblemType.LINEAR)\nts.setRHSFunction(rhs_function)\nts.setType('rk')\nts.setTime(0.0)\nts.setMaxTime(2.0)\nts.setTimeStep(0.1)\nts.setFromOptions()\n\nts.solve(x)\n\nv_lo, v_hi = x.getOwnershipRange()\nlocal_vals = x.getValues(range(v_lo, v_hi))\nif rank == 0:\n    print(f\"Initial value was 10.0. After evolving to t=2.0, index 0 value is: {local_vals[0]:.4f}\")\n    # Analytical: 10 * e^(-0.5 * 2) ≈ 3.6788\n\nx.destroy()\nA.destroy()\nts.destroy()\nThis is the pattern the distributed HEOM solver will follow — define a distributed RHS function, hand it to PETSc TS, let it integrate. Good to have a working toy version before dealing with the actual hierarchy.\n\nNext up: Profiling the existing HEOM solver to understand where it breaks down."
-  },
-  {
-    "objectID": "posts/Community Bonding/community-bonding.html",
-    "href": "posts/Community Bonding/community-bonding.html",
-    "title": "Community Bonding Period: Setting the Foundation for Success",
-    "section": "",
-    "text": "The community bonding period (May 12 - May 24) is wrapped up. Honestly it went by faster than I expected."
-  },
-  {
-    "objectID": "posts/Community Bonding/community-bonding.html#meeting-the-team",
-    "href": "posts/Community Bonding/community-bonding.html#meeting-the-team",
-    "title": "Community Bonding Period: Setting the Foundation for Success",
-    "section": "Meeting the Team",
-    "text": "Meeting the Team\nHad my first meeting with Alex, Emil, Neill and Simon early in the period. Main thing we sorted out was the tech stack — we decided to go with PETSc and MPI for the distributed solver. PETSc handles the distributed data structures and ODE integration through its TS interface, MPI handles the inter-process communication. Makes sense given that PETSc is basically the standard for this kind of scientific computing work on HPC clusters.\nOnce that was settled, the rest of bonding was mostly about getting everything running on my machine and getting comfortable with it."
-  },
-  {
-    "objectID": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
-    "href": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
-    "title": "Community Bonding Period: Setting the Foundation for Success",
-    "section": "Getting the Stack Running",
-    "text": "Getting the Stack Running\nSetting up PETSc locally was… an experience. It’s not the kind of library you just pip install and move on. Got through it though — PETSc built, MPI configured, and a basic test confirming distributed vectors were actually distributing across processes the way they should.\nSpent the remaining time going through PETSc’s documentation properly, particularly the TS interface which is what we’ll be using for the time integration. Also ran through some MPI basics to make sure I’m solid on communication patterns before I need to think about them in the context of the HEOM hierarchy."
-  },
-  {
-    "objectID": "posts/Community Bonding/community-bonding.html#looking-ahead",
-    "href": "posts/Community Bonding/community-bonding.html#looking-ahead",
-    "title": "Community Bonding Period: Setting the Foundation for Success",
-    "section": "Looking Ahead",
-    "text": "Looking Ahead\nStack is set up, I know what I’m working with. Coding phase starts now — first order of business is profiling the existing solver to understand where it actually breaks down before building anything new.\n\nNext up: Profiling the existing HEOM solver."
-  },
-  {
-    "objectID": "about.html",
-    "href": "about.html",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "",
-    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
-  },
-  {
-    "objectID": "about.html#hey",
-    "href": "about.html#hey",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "",
-    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
-  },
-  {
-    "objectID": "about.html#current-work",
-    "href": "about.html#current-work",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "Current Work",
-    "text": "Current Work\nGoogle Summer of Code 2026 Contributor\nMay 2026 - Present\nWorking with NumFOCUS on building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). The project integrates PETSc and MPI into the existing solver so that large-scale open quantum system simulations can be distributed across HPC clusters — without touching anything for users who don’t need it.\nKey contributions: - Profiling the existing HEOM solver to identify memory and compute bottlenecks - Designing a distributed data layout for the hierarchy across MPI ranks - Integrating PETSc’s TS interface for distributed ODE integration - Writing HPC tutorials and documentation for real cluster workflows"
-  },
-  {
-    "objectID": "about.html#interests",
-    "href": "about.html#interests",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "Interests",
-    "text": "Interests\n\nHigh Performance Computing: Distributed systems, MPI, and scientific computing at scale\nOpen Source: Contributing to scientific Python libraries\nPython Development: Scientific computing, numerical methods, and performance optimization\nResearch: Open quantum systems, computational physics, and HPC architecture"
-  },
-  {
-    "objectID": "about.html#technical-skills",
-    "href": "about.html#technical-skills",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "Technical Skills",
-    "text": "Technical Skills\n\nLanguages: Python, C\nQuantum Computing: QuTiP, PETSc, MPI\nTools: Git, GitHub, Jupyter, LaTeX\nWeb Development: Quarto, GitHub Pages"
-  },
-  {
-    "objectID": "about.html#contact",
-    "href": "about.html#contact",
-    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
-    "section": "Contact",
-    "text": "Contact\nFeel free to reach out if you want to talk HPC, open quantum systems, or open source.\n\nEmail: chinmaytangal124@gmail.com\nGitHub: github.com/Chinmay-Tangal\nLinkedIn: linkedin.com/in/chinmay-tangal\nTwitter: x.com/Chinmay_Tangal"
-  },
-  {
-    "objectID": "index.html",
-    "href": "index.html",
-    "title": "Welcome to My GSoC 2026 Journey",
-    "section": "",
-    "text": "Hi, I’m Chinmay Tangal – a Computer Engineering undergrad with a growing interest in high-performance computing, open quantum systems, and open-source scientific software. I’m excited to be part of Google Summer of Code 2026 with NumFOCUS, working on a project that sits right at the intersection of quantum physics and systems-level computing.\nThis blog is where I’ll document my GSoC experience, the technical problems I run into, and how I’m thinking through building a cluster-ready quantum solver.\n\n\n\n\n\n\n\n\n\nI’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website\n\n\n\n\n\n\nMay 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →\n\n\n\n\nThis site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
-  },
-  {
-    "objectID": "index.html#about-the-project",
-    "href": "index.html#about-the-project",
-    "title": "Welcome to My GSoC 2026 Journey",
-    "section": "",
-    "text": "I’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website"
-  },
-  {
-    "objectID": "index.html#recent-posts",
-    "href": "index.html#recent-posts",
-    "title": "Welcome to My GSoC 2026 Journey",
-    "section": "",
-    "text": "May 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →"
-  },
-  {
-    "objectID": "index.html#about-this-site",
-    "href": "index.html#about-this-site",
-    "title": "Welcome to My GSoC 2026 Journey",
-    "section": "",
-    "text": "This site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
-  },
-  {
-    "objectID": "posts/intro/gsoc-selection.html",
-    "href": "posts/intro/gsoc-selection.html",
-    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
-    "section": "",
-    "text": "A few months ago, I put together a GSoC proposal half-convinced it wouldn’t go anywhere. I’d been contributing to QuTiP for a while, understood the codebase well enough to spot a real problem, and figured — why not try?\nI’m happy to share that I’ve been selected as a Google Summer of Code 2026 contributor! 🚀"
-  },
-  {
-    "objectID": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
-    "href": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
-    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
-    "section": "What I’ll Be Working On",
-    "text": "What I’ll Be Working On\nHere’s the problem: the HEOM solver in QuTiP is single-node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that’s fine. But push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff fast. There’s no workaround — it’s a structural limitation.\nMy project builds the distributed path that’s been missing: integrating PETSc and MPI into the solver so the ODE integration can run across multiple nodes on an HPC cluster.\nThe project will include:\n\nDistributed data layout for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local rather than all-to-all\nPETSc TS integration for distributed vector and matrix operations and time integration\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nHPC documentation and tutorials for running the solver on real cluster infrastructure\n\nThe existing solver stays completely untouched — if you don’t need distributed execution, nothing changes for you."
-  },
-  {
-    "objectID": "posts/intro/gsoc-selection.html#looking-forward",
-    "href": "posts/intro/gsoc-selection.html#looking-forward",
-    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
-    "section": "Looking Forward",
-    "text": "Looking Forward\nI’ve spent the past few months going through the QuTiP codebase, submitting PRs, and getting a feel for how the project works. That groundwork made writing the proposal a lot more concrete — I wasn’t guessing at the architecture, I’d actually traced through it.\nNow I get to spend the summer working on the part that genuinely interested me from the start: the design problem of distributing a coupled hierarchy without turning communication into the new bottleneck.\nOver the next few months, I’ll be:\n\nProfiling the existing solver and nailing down the distributed data layout with mentors\nBuilding and testing the PETSc-based execution path\nValidating correctness and running scaling benchmarks on HPC infrastructure\nDocumenting everything here as I go\n\nExpect posts on the design decisions, the tricky bits, and probably a few dead ends along the way."
-  },
-  {
-    "objectID": "posts/intro/gsoc-selection.html#acknowledgments",
-    "href": "posts/intro/gsoc-selection.html#acknowledgments",
-    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
-    "section": "Acknowledgments",
-    "text": "Acknowledgments\nThanks to the QuTiP team — especially my mentors Alex Pitchford and Eric Giguère — for taking on this project and for the feedback they gave during the proposal stage. Looking forward to the summer.\n\nFollowing along, working on something related, or also doing GSoC this year? Feel free to reach out — always happy to talk HPC, open quantum systems, or open source.\n\n\n\n\n\n\nTipInterested in QuTiP?\n\n\n\nCheck out the QuTiP documentation to learn more about quantum simulations in Python!\n\n\nTags: GSoC2026, HPC, OpenQuantumSystems, OpenSource, Python, QuTiP, NumFOCUS, PETSc, MPI"
-  },
-  {
-    "objectID": "posts/Week-2/week2.html",
-    "href": "posts/Week-2/week2.html",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "",
-    "text": "Coding phase Week 2 was focused on understanding the current HEOM implementation before making any modifications to it.\nBefore attempting PETSc integration, I wanted to establish a performance baseline for the existing solver, identify the major bottlenecks, and understand how the computational cost scales with hierarchy depth and system size."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#benchmarking-hierarchy-depth-scaling",
-    "href": "posts/Week-2/week2.html#benchmarking-hierarchy-depth-scaling",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Benchmarking Hierarchy Depth Scaling",
-    "text": "Benchmarking Hierarchy Depth Scaling\nI started with a standard spin-boson model and measured runtime as the hierarchy depth increased. Alongside runtime, I also recorded the number of Auxiliary Density Operators (ADOs), which is one of the main drivers of HEOM complexity.\n\nBenchmark Script\nimport time\nimport numpy as np\n\nfrom qutip import basis, sigmaz\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\n# System parameters\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\n\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\n# Bath parameters\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\n\nQ = sigmaz()\n\ntlist = np.linspace(0, 100, 2000)\n\ndepths = [4, 6, 8, 10]\n\nfor depth in depths:\n\n    bath = DrudeLorentzBath(\n        Q=Q,\n        lam=lam,\n        gamma=gamma,\n        T=T,\n        Nk=Nk\n    )\n\n    start = time.perf_counter()\n\n    solver = HEOMSolver(\n        H,\n        bath,\n        max_depth=depth,\n        options={\"progress_bar\": False}\n    )\n\n    ado_count = len(solver.ados.labels)\n\n    result = solver.run(rho0, tlist)\n\n    runtime = time.perf_counter() - start\n\n    print(\n        f\"Depth={depth}, \"\n        f\"ADOs={ado_count}, \"\n        f\"Runtime={runtime:.3f} s\"\n    )\n\n\nResults\n\n\n\nDepth\nADO Count\nRuntime (s)\n\n\n\n\n4\n715\n0.347\n\n\n6\n5005\n2.189\n\n\n8\n24310\n18.029\n\n\n10\n92378\n81.407\n\n\n\nThe growth is substantial. Increasing the hierarchy depth from 4 to 10 increases the number of ADOs by roughly 129× while runtime increases by approximately 235×.\nThis immediately highlights why HEOM becomes challenging for larger simulations."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#measuring-memory-usage",
-    "href": "posts/Week-2/week2.html#measuring-memory-usage",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Measuring Memory Usage",
-    "text": "Measuring Memory Usage\nRuntime is only one part of the picture. Since the long-term goal is distributed-memory execution, I also measured peak memory usage using:\n/usr/bin/time -v python benchmark.py\nThe metric of interest was:\nMaximum resident set size (kbytes)\n\nResults\n\n\n\nDepth\nPeak Memory (MB)\n\n\n\n\n4\n121.6\n\n\n6\n133.7\n\n\n8\n199.5\n\n\n10\n458.8\n\n\n\nMemory usage increases significantly as the hierarchy expands, particularly at larger depths."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#profiling-the-solver",
-    "href": "posts/Week-2/week2.html#profiling-the-solver",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Profiling the Solver",
-    "text": "Profiling the Solver\nAfter collecting runtime measurements, I used Python’s built-in profiler to determine where execution time was actually being spent.\npython -m cProfile -o depth10.prof benchmark.py\nThe profiling data was inspected using:\npython -m pstats depth10.prof\nand sorted by cumulative runtime:\nsort cumulative\nstats 30\n\nDominant Bottlenecks\nThe largest contributors to runtime were:\n\n\n\nFunction\nDescription\n\n\n\n\nscipy.integrate._vode.zvode\nODE integration\n\n\n_calculate_rhs\nHEOM RHS construction\n\n\n_rhs\nRHS evaluation\n\n\n_restore_state\nState reconstruction\n\n\n_grad_prev / _grad_next\nHierarchy traversal\n\n\n\nThe profile clearly showed that most of the runtime is spent either integrating the large HEOM system of equations or constructing and applying the hierarchy coupling structure.\nThese are likely to be key targets for future optimization and parallelization."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#scaling-with-system-size",
-    "href": "posts/Week-2/week2.html#scaling-with-system-size",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Scaling with System Size",
-    "text": "Scaling with System Size\nHierarchy depth is only one source of complexity. The cost of operations also depends on the size of the underlying quantum system.\nTo investigate this, I repeated the benchmark using a two-qubit Hamiltonian.\n\nTwo-Qubit Benchmark\nimport time\nimport numpy as np\n\nfrom qutip import (\n    basis,\n    sigmaz,\n    qeye,\n    tensor\n)\n\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\nH = (\n    0.5 * tensor(sigmaz(), qeye(2))\n    + 0.5 * tensor(qeye(2), sigmaz())\n)\n\npsi0 = tensor(basis(2, 0), basis(2, 0))\nrho0 = psi0 * psi0.dag()\n\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\n\nQ = tensor(sigmaz(), qeye(2))\n\ntlist = np.linspace(0, 100, 2000)\n\ndepths = [4, 6, 8, 10]\n\nfor depth in depths:\n\n    bath = DrudeLorentzBath(\n        Q=Q,\n        lam=lam,\n        gamma=gamma,\n        T=T,\n        Nk=Nk\n    )\n\n    start = time.perf_counter()\n\n    solver = HEOMSolver(\n        H,\n        bath,\n        max_depth=depth,\n        options={\"progress_bar\": False}\n    )\n\n    ado_count = len(solver.ados.labels)\n\n    result = solver.run(rho0, tlist)\n\n    runtime = time.perf_counter() - start\n\n    print(\n        f\"Depth={depth}, \"\n        f\"ADOs={ado_count}, \"\n        f\"Runtime={runtime:.3f} s\"\n    )\n\n\nResults\n\n\n\nDepth\nADO Count\nRuntime (s)\n\n\n\n\n4\n715\n0.861\n\n\n6\n5005\n11.169\n\n\n8\n24310\n68.927\n\n\n10\n92378\n308.473\n\n\n\nThe number of ADOs remains unchanged because the hierarchy structure is the same, but each ADO becomes more expensive to evolve due to the larger Hilbert space dimension.\nThis demonstrates a second scaling challenge:\n\nIncreasing hierarchy depth increases the number of ADOs.\nIncreasing system size increases the computational cost per ADO.\n\nBoth effects contribute significantly to runtime growth."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#key-findings",
-    "href": "posts/Week-2/week2.html#key-findings",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Key Findings",
-    "text": "Key Findings\nBy the end of the week I had established a baseline performance profile of the current HEOM implementation.\n\nRuntime grows rapidly with hierarchy depth.\nMemory usage increases substantially as the hierarchy expands.\nODE integration dominates overall runtime.\nRHS construction and hierarchy traversal are major computational bottlenecks.\nLarger quantum systems significantly increase the cost of evolving each ADO.\n\nMost importantly, these measurements provide a reproducible baseline against which future PETSc-based implementations can be compared."
-  },
-  {
-    "objectID": "posts/Week-2/week2.html#looking-ahead",
-    "href": "posts/Week-2/week2.html#looking-ahead",
-    "title": "Week 2: Profiling the Existing HEOM Solver",
-    "section": "Looking Ahead",
-    "text": "Looking Ahead\nThe next step is to dig deeper into the HEOM source code and understand how hierarchy data structures, ADO mappings, and RHS assembly are implemented internally.\nThe profiling results point directly toward the parts of the codebase that deserve the closest attention:\n\n_calculate_rhs\n_rhs\n_grad_prev\n_grad_next\n_restore_state\n\nUnderstanding how these pieces interact will be important before attempting any distributed-memory redesign using PETSc vectors, matrices, and TS integrators.\n\nNext up: exploring the HEOM internals and identifying how the hierarchy structure can be mapped onto PETSc’s distributed data structures."
-  },
-  {
     "objectID": "posts/Week-3/week3.html",
     "href": "posts/Week-3/week3.html",
     "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
@@ -341,5 +117,299 @@
     "title": "Week 3: Extracting the RHS Matrix and Building the PETSc Bridge",
     "section": "Next Steps",
     "text": "Next Steps\nThe next step is getting the PETSc TS call working end-to-end on a single process, then validating that it produces the same result as the SciPy bridge above. After that, the work shifts to the distributed data layout question: which rows of \\mathbf{R} live on which MPI rank, and how to minimize inter-rank communication given the hierarchy’s coupling structure.\n\nFull notebook: heom_rhs_bridge.ipynb"
+  },
+  {
+    "objectID": "posts/Week-2/week2.html",
+    "href": "posts/Week-2/week2.html",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "",
+    "text": "Coding phase Week 2 was focused on understanding the current HEOM implementation before making any modifications to it.\nBefore attempting PETSc integration, I wanted to establish a performance baseline for the existing solver, identify the major bottlenecks, and understand how the computational cost scales with hierarchy depth and system size."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#benchmarking-hierarchy-depth-scaling",
+    "href": "posts/Week-2/week2.html#benchmarking-hierarchy-depth-scaling",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Benchmarking Hierarchy Depth Scaling",
+    "text": "Benchmarking Hierarchy Depth Scaling\nI started with a standard spin-boson model and measured runtime as the hierarchy depth increased. Alongside runtime, I also recorded the number of Auxiliary Density Operators (ADOs), which is one of the main drivers of HEOM complexity.\n\nBenchmark Script\nimport time\nimport numpy as np\n\nfrom qutip import basis, sigmaz\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\n# System parameters\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\n\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\n# Bath parameters\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\n\nQ = sigmaz()\n\ntlist = np.linspace(0, 100, 2000)\n\ndepths = [4, 6, 8, 10]\n\nfor depth in depths:\n\n    bath = DrudeLorentzBath(\n        Q=Q,\n        lam=lam,\n        gamma=gamma,\n        T=T,\n        Nk=Nk\n    )\n\n    start = time.perf_counter()\n\n    solver = HEOMSolver(\n        H,\n        bath,\n        max_depth=depth,\n        options={\"progress_bar\": False}\n    )\n\n    ado_count = len(solver.ados.labels)\n\n    result = solver.run(rho0, tlist)\n\n    runtime = time.perf_counter() - start\n\n    print(\n        f\"Depth={depth}, \"\n        f\"ADOs={ado_count}, \"\n        f\"Runtime={runtime:.3f} s\"\n    )\n\n\nResults\n\n\n\nDepth\nADO Count\nRuntime (s)\n\n\n\n\n4\n715\n0.347\n\n\n6\n5005\n2.189\n\n\n8\n24310\n18.029\n\n\n10\n92378\n81.407\n\n\n\nThe growth is substantial. Increasing the hierarchy depth from 4 to 10 increases the number of ADOs by roughly 129× while runtime increases by approximately 235×.\nThis immediately highlights why HEOM becomes challenging for larger simulations."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#measuring-memory-usage",
+    "href": "posts/Week-2/week2.html#measuring-memory-usage",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Measuring Memory Usage",
+    "text": "Measuring Memory Usage\nRuntime is only one part of the picture. Since the long-term goal is distributed-memory execution, I also measured peak memory usage using:\n/usr/bin/time -v python benchmark.py\nThe metric of interest was:\nMaximum resident set size (kbytes)\n\nResults\n\n\n\nDepth\nPeak Memory (MB)\n\n\n\n\n4\n121.6\n\n\n6\n133.7\n\n\n8\n199.5\n\n\n10\n458.8\n\n\n\nMemory usage increases significantly as the hierarchy expands, particularly at larger depths."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#profiling-the-solver",
+    "href": "posts/Week-2/week2.html#profiling-the-solver",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Profiling the Solver",
+    "text": "Profiling the Solver\nAfter collecting runtime measurements, I used Python’s built-in profiler to determine where execution time was actually being spent.\npython -m cProfile -o depth10.prof benchmark.py\nThe profiling data was inspected using:\npython -m pstats depth10.prof\nand sorted by cumulative runtime:\nsort cumulative\nstats 30\n\nDominant Bottlenecks\nThe largest contributors to runtime were:\n\n\n\nFunction\nDescription\n\n\n\n\nscipy.integrate._vode.zvode\nODE integration\n\n\n_calculate_rhs\nHEOM RHS construction\n\n\n_rhs\nRHS evaluation\n\n\n_restore_state\nState reconstruction\n\n\n_grad_prev / _grad_next\nHierarchy traversal\n\n\n\nThe profile clearly showed that most of the runtime is spent either integrating the large HEOM system of equations or constructing and applying the hierarchy coupling structure.\nThese are likely to be key targets for future optimization and parallelization."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#scaling-with-system-size",
+    "href": "posts/Week-2/week2.html#scaling-with-system-size",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Scaling with System Size",
+    "text": "Scaling with System Size\nHierarchy depth is only one source of complexity. The cost of operations also depends on the size of the underlying quantum system.\nTo investigate this, I repeated the benchmark using a two-qubit Hamiltonian.\n\nTwo-Qubit Benchmark\nimport time\nimport numpy as np\n\nfrom qutip import (\n    basis,\n    sigmaz,\n    qeye,\n    tensor\n)\n\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\nH = (\n    0.5 * tensor(sigmaz(), qeye(2))\n    + 0.5 * tensor(qeye(2), sigmaz())\n)\n\npsi0 = tensor(basis(2, 0), basis(2, 0))\nrho0 = psi0 * psi0.dag()\n\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\n\nQ = tensor(sigmaz(), qeye(2))\n\ntlist = np.linspace(0, 100, 2000)\n\ndepths = [4, 6, 8, 10]\n\nfor depth in depths:\n\n    bath = DrudeLorentzBath(\n        Q=Q,\n        lam=lam,\n        gamma=gamma,\n        T=T,\n        Nk=Nk\n    )\n\n    start = time.perf_counter()\n\n    solver = HEOMSolver(\n        H,\n        bath,\n        max_depth=depth,\n        options={\"progress_bar\": False}\n    )\n\n    ado_count = len(solver.ados.labels)\n\n    result = solver.run(rho0, tlist)\n\n    runtime = time.perf_counter() - start\n\n    print(\n        f\"Depth={depth}, \"\n        f\"ADOs={ado_count}, \"\n        f\"Runtime={runtime:.3f} s\"\n    )\n\n\nResults\n\n\n\nDepth\nADO Count\nRuntime (s)\n\n\n\n\n4\n715\n0.861\n\n\n6\n5005\n11.169\n\n\n8\n24310\n68.927\n\n\n10\n92378\n308.473\n\n\n\nThe number of ADOs remains unchanged because the hierarchy structure is the same, but each ADO becomes more expensive to evolve due to the larger Hilbert space dimension.\nThis demonstrates a second scaling challenge:\n\nIncreasing hierarchy depth increases the number of ADOs.\nIncreasing system size increases the computational cost per ADO.\n\nBoth effects contribute significantly to runtime growth."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#key-findings",
+    "href": "posts/Week-2/week2.html#key-findings",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Key Findings",
+    "text": "Key Findings\nBy the end of the week I had established a baseline performance profile of the current HEOM implementation.\n\nRuntime grows rapidly with hierarchy depth.\nMemory usage increases substantially as the hierarchy expands.\nODE integration dominates overall runtime.\nRHS construction and hierarchy traversal are major computational bottlenecks.\nLarger quantum systems significantly increase the cost of evolving each ADO.\n\nMost importantly, these measurements provide a reproducible baseline against which future PETSc-based implementations can be compared."
+  },
+  {
+    "objectID": "posts/Week-2/week2.html#looking-ahead",
+    "href": "posts/Week-2/week2.html#looking-ahead",
+    "title": "Week 2: Profiling the Existing HEOM Solver",
+    "section": "Looking Ahead",
+    "text": "Looking Ahead\nThe next step is to dig deeper into the HEOM source code and understand how hierarchy data structures, ADO mappings, and RHS assembly are implemented internally.\nThe profiling results point directly toward the parts of the codebase that deserve the closest attention:\n\n_calculate_rhs\n_rhs\n_grad_prev\n_grad_next\n_restore_state\n\nUnderstanding how these pieces interact will be important before attempting any distributed-memory redesign using PETSc vectors, matrices, and TS integrators.\n\nNext up: exploring the HEOM internals and identifying how the hierarchy structure can be mapped onto PETSc’s distributed data structures."
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html",
+    "href": "posts/intro/gsoc-selection.html",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "",
+    "text": "A few months ago, I put together a GSoC proposal half-convinced it wouldn’t go anywhere. I’d been contributing to QuTiP for a while, understood the codebase well enough to spot a real problem, and figured — why not try?\nI’m happy to share that I’ve been selected as a Google Summer of Code 2026 contributor! 🚀"
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
+    "href": "posts/intro/gsoc-selection.html#what-ill-be-working-on",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "What I’ll Be Working On",
+    "text": "What I’ll Be Working On\nHere’s the problem: the HEOM solver in QuTiP is single-node. The entire hierarchy state lives in one vector on one machine, integrated with a single scipy ODE call. For small systems that’s fine. But push the hierarchy depth past 6, or work with anything beyond a few qubits, and you hit a memory cliff fast. There’s no workaround — it’s a structural limitation.\nMy project builds the distributed path that’s been missing: integrating PETSc and MPI into the solver so the ODE integration can run across multiple nodes on an HPC cluster.\nThe project will include:\n\nDistributed data layout for the HEOM hierarchy across MPI ranks, designed to keep inter-rank communication local rather than all-to-all\nPETSc TS integration for distributed vector and matrix operations and time integration\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nHPC documentation and tutorials for running the solver on real cluster infrastructure\n\nThe existing solver stays completely untouched — if you don’t need distributed execution, nothing changes for you."
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#looking-forward",
+    "href": "posts/intro/gsoc-selection.html#looking-forward",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "Looking Forward",
+    "text": "Looking Forward\nI’ve spent the past few months going through the QuTiP codebase, submitting PRs, and getting a feel for how the project works. That groundwork made writing the proposal a lot more concrete — I wasn’t guessing at the architecture, I’d actually traced through it.\nNow I get to spend the summer working on the part that genuinely interested me from the start: the design problem of distributing a coupled hierarchy without turning communication into the new bottleneck.\nOver the next few months, I’ll be:\n\nProfiling the existing solver and nailing down the distributed data layout with mentors\nBuilding and testing the PETSc-based execution path\nValidating correctness and running scaling benchmarks on HPC infrastructure\nDocumenting everything here as I go\n\nExpect posts on the design decisions, the tricky bits, and probably a few dead ends along the way."
+  },
+  {
+    "objectID": "posts/intro/gsoc-selection.html#acknowledgments",
+    "href": "posts/intro/gsoc-selection.html#acknowledgments",
+    "title": "Exciting News: I’m Joining Google Summer of Code 2026!",
+    "section": "Acknowledgments",
+    "text": "Acknowledgments\nThanks to the QuTiP team — especially my mentors Alex Pitchford and Eric Giguère — for taking on this project and for the feedback they gave during the proposal stage. Looking forward to the summer.\n\nFollowing along, working on something related, or also doing GSoC this year? Feel free to reach out — always happy to talk HPC, open quantum systems, or open source.\n\n\n\n\n\n\nTipInterested in QuTiP?\n\n\n\nCheck out the QuTiP documentation to learn more about quantum simulations in Python!\n\n\nTags: GSoC2026, HPC, OpenQuantumSystems, OpenSource, Python, QuTiP, NumFOCUS, PETSc, MPI"
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "Hi, I’m Chinmay Tangal – a Computer Engineering undergrad with a growing interest in high-performance computing, open quantum systems, and open-source scientific software. I’m excited to be part of Google Summer of Code 2026 with NumFOCUS, working on a project that sits right at the intersection of quantum physics and systems-level computing.\nThis blog is where I’ll document my GSoC experience, the technical problems I run into, and how I’m thinking through building a cluster-ready quantum solver.\n\n\n\n\n\n\n\n\n\nI’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website\n\n\n\n\n\n\nMay 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →\n\n\n\n\nThis site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
+  },
+  {
+    "objectID": "index.html#about-the-project",
+    "href": "index.html#about-the-project",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "I’m building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). HEOM — the Hierarchical Equations of Motion — is one of the few methods that can exactly simulate open quantum system dynamics without Markov or perturbative approximations. The catch is that it’s expensive: memory and compute blow up fast as hierarchy depth or system size grows. The current QuTiP implementation runs on a single node, which puts a hard ceiling on what’s realistically solvable.\nWhat I’m Building:\n\nA distributed execution path for the HEOM solver using PETSc and MPI, so the ODE integration can run across multiple nodes on an HPC cluster\nA careful distributed data layout for the hierarchy that keeps inter-rank communication manageable\nCorrectness validation against the existing solver on standard benchmark systems\nPerformance benchmarks across hierarchy depths, system sizes, and node counts\nDocumentation and tutorials for running the solver on real HPC infrastructure\n\nTechnologies & Tools:\n\nPrimary: Python, PETSc, MPI, QuTiP, SciPy\nDevelopment: Git, GitHub, Jupyter Notebooks\nDocumentation: LaTeX, Matplotlib\nTesting: pytest framework\n\nMentors: Alex Pitchford, Emil VATAI, Neill Lambert\nThe existing solver stays completely untouched — users who don’t need distributed execution shouldn’t have to think about any of this.\n🔗 View Project Details on GSoC Website"
+  },
+  {
+    "objectID": "index.html#recent-posts",
+    "href": "index.html#recent-posts",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "May 2026\nI’d been contributing to QuTiP for a few months when I decided to put together a GSoC proposal. I didn’t expect it to go anywhere — but here we are…\nRead more →"
+  },
+  {
+    "objectID": "index.html#about-this-site",
+    "href": "index.html#about-this-site",
+    "title": "Welcome to My GSoC 2026 Journey",
+    "section": "",
+    "text": "This site is built with Quarto and hosted on GitHub Pages. It’s part technical blog, part development log for everything happening during this project.\nTopics I write about:\n\nOpen quantum systems and simulation\nHigh-performance and distributed computing\nOpen source development\nPython and C programming\nGSoC 2026 journey\nTechnical tutorials and HPC workflows\n\n\nLast updated: June 2026"
+  },
+  {
+    "objectID": "about.html",
+    "href": "about.html",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
+  },
+  {
+    "objectID": "about.html#hey",
+    "href": "about.html#hey",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "I’m a computer engineering student who stumbled into open source through quantum physics — and honestly never looked back. This summer I’m a Google Summer of Code 2026 contributor, working on making QuTiP’s HEOM solver scale beyond a single machine."
+  },
+  {
+    "objectID": "about.html#current-work",
+    "href": "about.html#current-work",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Current Work",
+    "text": "Current Work\nGoogle Summer of Code 2026 Contributor\nMay 2026 - Present\nWorking with NumFOCUS on building a distributed HEOM solver for QuTiP (Quantum Toolbox in Python). The project integrates PETSc and MPI into the existing solver so that large-scale open quantum system simulations can be distributed across HPC clusters — without touching anything for users who don’t need it.\nKey contributions: - Profiling the existing HEOM solver to identify memory and compute bottlenecks - Designing a distributed data layout for the hierarchy across MPI ranks - Integrating PETSc’s TS interface for distributed ODE integration - Writing HPC tutorials and documentation for real cluster workflows"
+  },
+  {
+    "objectID": "about.html#interests",
+    "href": "about.html#interests",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Interests",
+    "text": "Interests\n\nHigh Performance Computing: Distributed systems, MPI, and scientific computing at scale\nOpen Source: Contributing to scientific Python libraries\nPython Development: Scientific computing, numerical methods, and performance optimization\nResearch: Open quantum systems, computational physics, and HPC architecture"
+  },
+  {
+    "objectID": "about.html#technical-skills",
+    "href": "about.html#technical-skills",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Technical Skills",
+    "text": "Technical Skills\n\nLanguages: Python, C\nQuantum Computing: QuTiP, PETSc, MPI\nTools: Git, GitHub, Jupyter, LaTeX\nWeb Development: Quarto, GitHub Pages"
+  },
+  {
+    "objectID": "about.html#contact",
+    "href": "about.html#contact",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "Contact",
+    "text": "Contact\nFeel free to reach out if you want to talk HPC, open quantum systems, or open source.\n\nEmail: chinmaytangal124@gmail.com\nGitHub: github.com/Chinmay-Tangal\nLinkedIn: linkedin.com/in/chinmay-tangal\nTwitter: x.com/Chinmay_Tangal"
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html",
+    "href": "posts/Community Bonding/community-bonding.html",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "",
+    "text": "The community bonding period (May 12 - May 24) is wrapped up. Honestly it went by faster than I expected."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#meeting-the-team",
+    "href": "posts/Community Bonding/community-bonding.html#meeting-the-team",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Meeting the Team",
+    "text": "Meeting the Team\nHad my first meeting with Alex, Emil, Neill and Simon early in the period. Main thing we sorted out was the tech stack — we decided to go with PETSc and MPI for the distributed solver. PETSc handles the distributed data structures and ODE integration through its TS interface, MPI handles the inter-process communication. Makes sense given that PETSc is basically the standard for this kind of scientific computing work on HPC clusters.\nOnce that was settled, the rest of bonding was mostly about getting everything running on my machine and getting comfortable with it."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
+    "href": "posts/Community Bonding/community-bonding.html#getting-the-stack-running",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Getting the Stack Running",
+    "text": "Getting the Stack Running\nSetting up PETSc locally was… an experience. It’s not the kind of library you just pip install and move on. Got through it though — PETSc built, MPI configured, and a basic test confirming distributed vectors were actually distributing across processes the way they should.\nSpent the remaining time going through PETSc’s documentation properly, particularly the TS interface which is what we’ll be using for the time integration. Also ran through some MPI basics to make sure I’m solid on communication patterns before I need to think about them in the context of the HEOM hierarchy."
+  },
+  {
+    "objectID": "posts/Community Bonding/community-bonding.html#looking-ahead",
+    "href": "posts/Community Bonding/community-bonding.html#looking-ahead",
+    "title": "Community Bonding Period: Setting the Foundation for Success",
+    "section": "Looking Ahead",
+    "text": "Looking Ahead\nStack is set up, I know what I’m working with. Coding phase starts now — first order of business is profiling the existing solver to understand where it actually breaks down before building anything new.\n\nNext up: Profiling the existing HEOM solver."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html",
+    "href": "posts/Week-1/week1.html",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "",
+    "text": "Coding phase has started. Week 1 was less about writing solver code and more about actually getting comfortable with the tools I’ll be using — MPI and PETSc. Worked through a set of exercises, each one building on the last."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#starting-with-mpi",
+    "href": "posts/Week-1/week1.html#starting-with-mpi",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Starting with MPI",
+    "text": "Starting with MPI\nStarted with the basics — splitting work across processes, each rank handles its chunk, gather results back to rank 0.\nfrom mpi4py import MPI\n\ncomm = MPI.COMM_WORLD \nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nchunk = 100 // size  \nstart = rank * chunk + 1   \nend   = start + chunk\n\nlocal_results = [(n, n * n) for n in range(start, end)] \n\nprint(f\"Rank {rank}: computed {start}² to {end-1}²\")\n\nall_results = comm.gather(local_results, root=0)\n\nif rank == 0:\n    flat = [item for sublist in all_results for item in sublist]\n    print(f\"\\nRank 0 has all {len(flat)} results\")\n    for n, sq in flat[:5]:\n        print(f\"  {n}² = {sq}\")\n    print(\"  ...\")\nSimple, but it made the mental model concrete."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#petsc-distributed-vectors",
+    "href": "posts/Week-1/week1.html#petsc-distributed-vectors",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "PETSc Distributed Vectors",
+    "text": "PETSc Distributed Vectors\nNext step was PETSc. Created a distributed vector, filled it with values, verified each rank owned the right slice.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nx = PETSc.Vec().create(comm=PETSc.COMM_WORLD)\nx.setSizes(100)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor i in range(lo, hi):\n    x.setValue(i, (i + 1) ** 2)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\nvals = x.getValues(range(lo, hi))\nprint(f\"Rank {rank} owns indices {lo}–{hi-1}, first={int(vals[0])}, last={int(vals[-1])}\")\n\ntotal = x.sum()\nif rank == 0:\n    print(f\"\\nSum of all squares = {int(total)}\")\n    print(f\"Expected           = {sum(i*i for i in range(1,101))}\")\n\nx.destroy()\ngetOwnershipRange() is the pattern I’ll be using constantly — each rank knows which slice of the global data it owns."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
+    "href": "posts/Week-1/week1.html#distributed-matrix-vector-multiplication",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Distributed Matrix-Vector Multiplication",
+    "text": "Distributed Matrix-Vector Multiplication\nBuilt a tridiagonal matrix distributed across ranks and multiplied it by a distributed vector. This is roughly the shape of what the HEOM RHS computation will look like.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nsize = comm.Get_size()\n\nglobal_size = 100\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, float(i))\nx.assemblyBegin()\nx.assemblyEnd()\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setFromOptions()\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    if i &gt; 0:\n        A.setValue(i, i - 1, -1.0)\n    A.setValue(i, i, 2.0)\n    if i &lt; global_size - 1:\n        A.setValue(i, i + 1, -1.0)\n\nA.assemblyBegin()\nA.assemblyEnd()\n\ny = PETSc.Vec().create(comm=comm)\ny.setSizes(global_size)\ny.setFromOptions()\ny.setUp()\n\nA.mult(x, y)\n\ny_lo, y_hi = y.getOwnershipRange()\nlocal_vals = y.getValues(range(y_lo, y_hi))\nprint(f\"Rank {rank} checked indices {y_lo} to {y_hi-1}.\")\nprint(f\"  -&gt; Index {y_lo} value: {local_vals[0]}\")\nprint(f\"  -&gt; Index {y_hi-1} value: {local_vals[-1]}\")\n\nx.destroy()\ny.destroy()\nA.destroy()\nThe assembly step is where MPI communication happens across rank boundaries — PETSc handles that internally."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
+    "href": "posts/Week-1/week1.html#multi-index-mapping-the-heom-layout",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "Multi-Index Mapping (The HEOM Layout)",
+    "text": "Multi-Index Mapping (The HEOM Layout)\nThis one was directly relevant to the project. In HEOM, auxiliary density matrices are labeled by multi-indices — (0,0), (1,0), (0,1), etc. PETSc only understands flat linear indices, so I needed a mapping function that converts hierarchy coordinates into a 1D index.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\n\nGRID_DIM = 5\nglobal_size = GRID_DIM * GRID_DIM\n\ndef get_flat_index(n1, n2):\n    return n1 * GRID_DIM + n2\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setFromOptions()\nx.setUp()\n\nlo, hi = x.getOwnershipRange()\n\nfor n1 in range(GRID_DIM):\n    for n2 in range(GRID_DIM):\n        flat_idx = get_flat_index(n1, n2)\n        if lo &lt;= flat_idx &lt; hi:\n            physics_value = float(n1 * 10 + n2)\n            x.setValue(flat_idx, physics_value)\n\nx.assemblyBegin()\nx.assemblyEnd()\n\ntarget_idx = get_flat_index(3, 2)\nif lo &lt;= target_idx &lt; hi:\n    val = x.getValues([target_idx])[0]\n    print(f\"Rank {rank} owns flat index {target_idx} (grid (3,2)). Value: {val}\")\n\nx.destroy()\nThis mapping is going to be central to the actual implementation."
+  },
+  {
+    "objectID": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
+    "href": "posts/Week-1/week1.html#ode-integration-with-petsc-ts",
+    "title": "Week 1: Getting Hands-On with MPI and PETSc",
+    "section": "ODE Integration with PETSc TS",
+    "text": "ODE Integration with PETSc TS\nLast exercise — hooking up PETSc’s time-stepper (TS) to actually solve an ODE in parallel. Used a simple decay system dx/dt = -0.5x so I could verify the output analytically.\nimport sys\nfrom mpi4py import MPI\nimport petsc4py\npetsc4py.init(sys.argv)\nfrom petsc4py import PETSc\n\ncomm = MPI.COMM_WORLD\nrank = comm.Get_rank()\nglobal_size = 10\n\nA = PETSc.Mat().create(comm=comm)\nA.setSizes([global_size, global_size])\nA.setType('aij')\nA.setUp()\n\nm_lo, m_hi = A.getOwnershipRange()\nfor i in range(m_lo, m_hi):\n    A.setValue(i, i, -0.5)\nA.assemblyBegin()\nA.assemblyEnd()\n\nx = PETSc.Vec().create(comm=comm)\nx.setSizes(global_size)\nx.setUp()\nv_lo, v_hi = x.getOwnershipRange()\nfor i in range(v_lo, v_hi):\n    x.setValue(i, 10.0)\nx.assemblyBegin()\nx.assemblyEnd()\n\ndef rhs_function(ts, t, vec_x, vec_f):\n    A.mult(vec_x, vec_f)\n\nts = PETSc.TS().create(comm=comm)\nts.setProblemType(ts.ProblemType.LINEAR)\nts.setRHSFunction(rhs_function)\nts.setType('rk')\nts.setTime(0.0)\nts.setMaxTime(2.0)\nts.setTimeStep(0.1)\nts.setFromOptions()\n\nts.solve(x)\n\nv_lo, v_hi = x.getOwnershipRange()\nlocal_vals = x.getValues(range(v_lo, v_hi))\nif rank == 0:\n    print(f\"Initial value was 10.0. After evolving to t=2.0, index 0 value is: {local_vals[0]:.4f}\")\n    # Analytical: 10 * e^(-0.5 * 2) ≈ 3.6788\n\nx.destroy()\nA.destroy()\nts.destroy()\nThis is the pattern the distributed HEOM solver will follow — define a distributed RHS function, hand it to PETSc TS, let it integrate. Good to have a working toy version before dealing with the actual hierarchy.\n\nNext up: Profiling the existing HEOM solver to understand where it breaks down."
+  },
+  {
+    "objectID": "posts/Week-3/heom_rhs_bridge.html",
+    "href": "posts/Week-3/heom_rhs_bridge.html",
+    "title": "Google Summer of Code 2026 | QuTiP | NumFOCUS",
+    "section": "",
+    "text": "import time\nimport numpy as np\nimport scipy.sparse as sp\nfrom scipy.integrate import solve_ivp\nimport matplotlib.pyplot as plt\n\nfrom qutip import basis, sigmaz, expect\nfrom qutip.solver.heom import HEOMSolver, DrudeLorentzBath\n\n\n# system\nepsilon = 1.0\nH = 0.5 * epsilon * sigmaz()\nrho0 = basis(2, 0) * basis(2, 0).dag()\n\n# bath\nlam = 0.1\ngamma = 0.5\nT = 1.0\nNk = 8\nQ = sigmaz()\n\ntlist = np.linspace(0, 20, 500)\ndepth = 2\nn = 2\n\n\n# reference run using the standard qutip solver\nbath = DrudeLorentzBath(Q=Q, lam=lam, gamma=gamma, T=T, Nk=Nk)\nsolver = HEOMSolver(H, bath, max_depth=depth, options={\"progress_bar\": False})\n\nn_ados = solver._n_ados\nn_total = n**2 * n_ados\n\nprint(f\"ADOs: {n_ados}\")\nprint(f\"state vector length: {n_total}\")\n\nt0 = time.perf_counter()\nresult_qutip = solver.run(rho0, tlist)\nt_qutip = time.perf_counter() - t0\n\nprint(f\"qutip runtime: {t_qutip:.3f} s\")\n\nsz_qutip = expect(sigmaz(), result_qutip.states)\n\n\n# extract the RHS matrix\n# solver.rhs(0) returns the full HEOM RHS as a qutip Qobj\n# .full() converts it to a numpy array\n# for a time-independent system this matrix does not change, so rhs(0) is enough\nRHS = sp.csr_matrix(solver.rhs(0).full())\n\nprint(f\"RHS shape: {RHS.shape}\")\nprint(f\"non-zeros: {RHS.nnz} out of {n_total**2} ({100*RHS.nnz/n_total**2:.1f}%)\")\n\n\n# build the extended initial state vector\n# HEOM state = [vec(rho_s), 0, 0, ...] where all ADOs start at zero\n# vec uses column-major order (qutip's convention)\nrho0_he = np.zeros(n_total, dtype=complex)\nrho0_he[:n**2] = rho0.full().ravel(\"F\")\n\nprint(f\"first 4 entries: {rho0_he[:4].real}  (should be [1, 0, 0, 0])\")\n\n\n# solve the same ODE using an external integrator\n# this is the part that will be replaced by petsc later\n# the ODE is: d/dt rho_he = RHS @ rho_he\n\ndef rhs_fn(t, y):\n    return RHS @ y\n\nt0 = time.perf_counter()\nsol = solve_ivp(\n    rhs_fn,\n    t_span=(tlist[0], tlist[-1]),\n    y0=rho0_he,\n    t_eval=tlist,\n    method=\"RK45\",\n    rtol=1e-8,\n    atol=1e-10,\n)\nt_bridge = time.perf_counter() - t0\n\nprint(f\"bridge runtime: {t_bridge:.3f} s\")\nprint(f\"success: {sol.success}\")\n\n\n# extract rho_s(t) from the bridge solution\n# first n^2 entries of each column are vec(rho_s), reshape back to n x n\n\ndef extract_rho_s(y):\n    return y[:n**2].reshape((n, n), order=\"F\")\n\nsz_bridge = np.array([\n    extract_rho_s(sol.y[:, i])[0, 0].real - extract_rho_s(sol.y[:, i])[1, 1].real\n    for i in range(len(tlist))\n])\n\n\n# validation\nmax_err = np.max(np.abs(sz_qutip - sz_bridge))\nprint(f\"max error vs qutip: {max_err:.2e}\")\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\n\naxes[0].plot(tlist, sz_qutip, lw=2, label=\"QuTiP\")\naxes[0].plot(tlist, sz_bridge, lw=1.5, ls=\"--\", label=\"bridge (scipy RK45)\")\naxes[0].set_xlabel(\"time\")\naxes[0].set_ylabel(r\"$\\langle \\sigma_z \\rangle$\")\naxes[0].legend()\naxes[0].grid(alpha=0.3)\n\naxes[1].semilogy(tlist, np.abs(sz_qutip - sz_bridge) + 1e-16)\naxes[1].set_xlabel(\"time\")\naxes[1].set_ylabel(\"pointwise error\")\naxes[1].grid(alpha=0.3)\n\nplt.tight_layout()\nplt.savefig(\"bridge_validation.png\", dpi=150, bbox_inches=\"tight\")\nplt.show()\n\n\n# petsc bridge\n# swap USE_PETSC to True after installing petsc4py\n# install: conda install -c conda-forge petsc petsc4py mpi4py\n\nUSE_PETSC = False\n\nif USE_PETSC:\n    import petsc4py\n    petsc4py.init()\n    from petsc4py import PETSc\n\n    # build petsc matrix from CSR data\n    A = PETSc.Mat().createAIJ(\n        size=(n_total, n_total),\n        csr=(RHS.indptr, RHS.indices, RHS.data),\n        comm=PETSc.COMM_WORLD,\n    )\n    A.assemblyBegin()\n    A.assemblyEnd()\n\n    x = A.createVecRight()\n    f = A.createVecLeft()\n    x.setValues(range(n_total), rho0_he)\n    x.assemblyBegin()\n    x.assemblyEnd()\n\n    def rhs_petsc(ts, t, x, f):\n        A.mult(x, f)\n\n    ts = PETSc.TS().create(comm=PETSc.COMM_WORLD)\n    ts.setType(PETSc.TS.Type.RK)\n    ts.setRHSFunction(rhs_petsc, f)\n    ts.setTime(tlist[0])\n    ts.setMaxTime(tlist[-1])\n    ts.setTimeStep(tlist[1] - tlist[0])\n    ts.setTolerances(rtol=1e-8, atol=1e-10)\n    ts.setFromOptions()\n\n    t0 = time.perf_counter()\n    ts.solve(x)\n    t_petsc = time.perf_counter() - t0\n\n    y_final = np.array(x.getArray())\n    rho_final = extract_rho_s(y_final)\n    sz_final = rho_final[0, 0].real - rho_final[1, 1].real\n\n    print(f\"petsc runtime: {t_petsc:.3f} s\")\n    print(f\"&lt;sigma_z&gt; at t_final: {sz_final:.6f}\")\n    print(f\"qutip reference:      {sz_qutip[-1]:.6f}\")\nelse:\n    print(\"petsc bridge skipped. set USE_PETSC = True to run.\")"
+  },
+  {
+    "objectID": "posts/Week-4/week4.html",
+    "href": "posts/Week-4/week4.html",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "",
+    "text": "Week 4 was the most technically involved week so far. The goal shifted from using QuTiP’s HEOM solver to understanding it well enough to replace its internals — rebuilding the RHS matrix from first principles, assembling it directly into PETSc, and finally distributing that assembly across MPI ranks so that the matrix never has to exist in full on any single machine."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#recap-where-we-left-off",
+    "href": "posts/Week-4/week4.html#recap-where-we-left-off",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Recap: Where We Left Off",
+    "text": "Recap: Where We Left Off\nBy the end of Week 3, the pipeline looked like this:\n\nQuTiP builds R → extract with solver.rhs(0).full() → hand to PETSc TS → solve\n\nThat worked and gave a 16× speedup over QuTiP at small scale. But the critical bottleneck was still there: QuTiP assembles the entire R matrix on a single process before we even touch PETSc. For large hierarchy depths, this single-process assembly is what kills scalability — not the ODE solve.\nThis week’s work addresses that bottleneck directly."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#the-roadmap",
+    "href": "posts/Week-4/week4.html#the-roadmap",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "The Roadmap",
+    "text": "The Roadmap\nThe approach this week followed two distinct tracks, called Optimal 1 and Optimal 2 in the diagram below.\n\n\n\nPipeline overview showing all tracks from baseline to fully distributed\n\n\nOptimal 1 (Hybrid): Build R ourselves using QuTiP’s internal dictionary approach, assemble into PETSc on a single process, solve with PETSc TS + MPI. The assembly is still serial, but the construction logic is now fully transparent and under our control — no longer a black box.\nOptimal 2 (Fully distributed): Each MPI rank builds only the rows of R that it owns. The matrix is never assembled on a single machine. Assembly and solve are both distributed from the start."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#understanding-the-heom-structure",
+    "href": "posts/Week-4/week4.html#understanding-the-heom-structure",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Understanding the HEOM Structure",
+    "text": "Understanding the HEOM Structure\nBefore writing any code, it is worth being precise about what R actually contains, because this is what the from-scratch construction must reproduce.\nThe full HEOM state vector is:\n\n\\vec{\\rho} = \\begin{pmatrix}\n\\text{vec}(\\rho^{(\\mathbf{0})}) \\\\\n\\text{vec}(\\rho^{(\\mathbf{e}_1)}) \\\\\n\\text{vec}(\\rho^{(\\mathbf{e}_2)}) \\\\\n\\vdots\n\\end{pmatrix}\n\nwhere \\rho^{(\\mathbf{n})} is the ADO with multi-index \\mathbf{n} = (n_1, n_2, \\ldots, n_K) and n_k counts how many times the k-th bath exponential mode has been “excited.” The matrix R is block structured: each block corresponds to a pair of ADOs, and the blocks are sparse because each ADO only couples to its immediate neighbours (one tier up or down, per Matsubara mode).\nConcretely, for each ADO at multi-index \\mathbf{n}:\nDiagonal block — system Liouvillian plus ADO decay: \n\\mathcal{L}_{\\text{sys}} - \\left(\\sum_k n_k \\nu_k\\right) \\mathbf{I}\n\nwhere \\mathcal{L}_{\\text{sys}} = -i[H, \\cdot] is the system Liouvillian in superoperator form, and \\nu_k are the bath exponent frequencies (Matsubara rates).\nCoupling down (to ADO \\mathbf{n} - \\mathbf{e}_k, one tier below): \n-i \\cdot n_k \\cdot \\left[c_k \\left(Q \\rho - \\rho Q^\\dagger \\right)\\right]\n\nwith c_k the bath correlation coefficient for mode k. For RI-type exponents (which arise in the Drude-Lorentz bath), there is an additional term involving the imaginary part coefficient c_k^{(2)}: \nn_k \\left[-i c_k (\\mathcal{L}Q - \\mathcal{R}Q) + c_k^{(2)} (\\mathcal{L}Q + \\mathcal{R}Q)\\right]\n where \\mathcal{L}Q \\cdot = Q\\rho and \\mathcal{R}Q \\cdot = \\rho Q are the left- and right-multiplication superoperators.\nCoupling up (to ADO \\mathbf{n} + \\mathbf{e}_k, one tier above): \n-i \\left(Q\\rho - \\rho Q\\right)\n\nNotice that the coupling-up term does not depend on c_k. This is a key structural feature of the HEOM — the bath coefficients appear only in the downward coupling.\n\nThe ADO Index Dictionary\nQuTiP v5 organises all of this via a HierarchyADOs object attached to the solver as solver.ados. The critical attributes are:\nados.labels      # list of ADO multi-index tuples, e.g. [(0,0,0), (1,0,0), ...]\nados.idx(label)  # integer position of a label in the big matrix\nados.next(label, k)  # label one step UP in mode k (None if at max depth)\nados.prev(label, k)  # label one step DOWN in mode k (None if at zero)\nados.vk          # list of nu_k values\nados.ck          # list of c_k values\nados.ck2         # list of c_k^(2) values (None for pure-R exponents)\nados.exponents   # list of BathExponent objects with .type, .ck, .vk, .ck2, .Q\nThe next and prev methods encode the hierarchy connectivity. When you call ados.next(label, k), you get the label of the ADO that is one level higher in mode k, or None if the depth ceiling is reached. This is exactly what you need to know which (row, column) block pairs to fill in R."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#optimal-1-building-r-with-the-dictionary-approach",
+    "href": "posts/Week-4/week4.html#optimal-1-building-r-with-the-dictionary-approach",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Optimal 1: Building R with the Dictionary Approach",
+    "text": "Optimal 1: Building R with the Dictionary Approach\nThe construction loop in heom_optimal1.py mirrors QuTiP’s internal _rhs() method exactly, but using scipy sparse matrices instead of QuTiP’s internal data types:\nrows, cols, data = [], [], []\n\ndef add_block(i_block, j_block, mat):\n    r0, c0 = i_block * Nsup, j_block * Nsup\n    coo = sp.csr_matrix(mat).tocoo()\n    for r, c, v in zip(coo.row, coo.col, coo.data):\n        rows.append(r0 + r)\n        cols.append(c0 + c)\n        data.append(v)\n\nfor idx, label in enumerate(ado_labels):\n    label = list(label)\n\n    # Diagonal: system Liouvillian + ADO decay\n    decay = sum(label[k] * exponents[k].vk for k in range(len(exponents)))\n    add_block(idx, idx, L_sys - decay * sp.eye(Nsup, format=\"csr\"))\n\n    for k, ex in enumerate(exponents):\n        nk = label[k]\n\n        # Coupling DOWN (to tier below)\n        if nk &gt;= 1:\n            lbl_down = tuple(label[j] - int(j == k) for j in range(len(exponents)))\n            if lbl_down in label_to_idx:\n                add_block(idx, label_to_idx[lbl_down], -1j * nk * comm_Q)\n\n        # Coupling UP (to tier above)\n        if sum(label) &lt; depth:\n            lbl_up = tuple(label[j] + int(j == k) for j in range(len(exponents)))\n            if lbl_up in label_to_idx:\n                add_block(idx, label_to_idx[lbl_up], -1j * (ck * Q_l - np.conj(ck) * Q_r))\n\nRHS_opt1 = sp.csr_matrix((data, (rows, cols)), shape=(n_total, n_total), dtype=complex)\n\nOutput and a Subtle Bug\nADOs: 55   state-vector length: 220\nRHS shape: (220, 220)   nnz: 578\nmax |RHS_opt1 - RHS_qutip| = 3.98e+00\nmax |err| vs QuTiP ref    : 0.00e+00\nThere is an interesting tension in these two lines. The RHS matrix differs from QuTiP’s by up to 3.98 in maximum entry, yet the solution trajectory is exact to machine precision. This is not a coincidence — it reveals something important about the coupling-up formula.\nThe correct coupling-up operator is: \n-i(Q\\rho - \\rho Q)\n which does not involve c_k at all. The code above used -i(c_k Q\\rho - c_k^* \\rho Q) instead, which is wrong for modes where c_k \\neq 1. However, for the specific initial state \\rho_0 = |0\\rangle\\langle 0| (which is diagonal), the coupling-up operator maps the initial state to zero:\n\n(Q\\rho_0 - \\rho_0 Q)_{ij} = (\\sigma_z)_{ii}\\rho_{ij} - \\rho_{ij}(\\sigma_z)_{jj}\n\nSince \\rho_0 is diagonal, the off-diagonal elements are zero, and only the diagonal blocks of Q\\rho - \\rho Q are nonzero. For \\sigma_z as the coupling operator, these diagonal blocks are also zero. So both the correct and incorrect coupling-up formulas give the same result for this specific initial condition.\nThe fix is to use -i \\cdot \\text{comm}_Q (independent of c_k) for the coupling-up term, which is what Optimal 2 and QuTiP’s _grad_next_bosonic both do. The Optimal 1 result is still correct for this test case, but would give wrong answers for a non-diagonal initial state.\n\n\nRuntimes (Optimal 1, depth=2, 4 MPI ranks)\n\n\n\nMethod\nRuntime\n\n\n\n\nQuTiP baseline\n0.048 s\n\n\nSciPy RK45 (our RHS)\n0.021 s\n\n\nPETSc TS + 4 MPI ranks\n0.003 s\n\n\n\nThe PETSc solve is 16× faster than QuTiP and 7× faster than scipy on this small problem. At this scale the problem is too small to show the real benefit — the point is that the same code will scale to much larger problems without modification."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#optimal-2-fully-distributed-assembly",
+    "href": "posts/Week-4/week4.html#optimal-2-fully-distributed-assembly",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Optimal 2: Fully Distributed Assembly",
+    "text": "Optimal 2: Fully Distributed Assembly\nIn Optimal 1, the construction of RHS_opt1 still happens on a single process before being loaded into PETSc. For large hierarchy depths this assembly becomes the bottleneck.\nOptimal 2 eliminates this bottleneck. Each MPI rank asks PETSc what rows it owns (A.getOwnershipRange()), then builds only those rows locally — the full matrix never exists on any single machine.\nA = PETSc.Mat().createAIJ(size=(n_total, n_total), comm=comm_petsc)\nA.setUp()\nrstart, rend = A.getOwnershipRange()\n\nfor ado_idx, label in enumerate(ado_labels):\n    row_off = ado_idx * Nsup\n    # ... compute diagonal and off-diagonal blocks ...\n    for local_r in range(Nsup):\n        gr = row_off + local_r\n        if rstart &lt;= gr &lt; rend:   # only fill rows this rank owns\n            A.setValue(gr, gc, gv)\nThis is the key structural change: the if rstart &lt;= gr &lt; rend guard means each rank performs exactly its share of the work, with no redundant computation and no global gather of the matrix.\n\nOutput (depth=8, Nk=8, 4 MPI ranks)\nK = 9 exponential terms\nADOs: 24,310   total DOF: 97,240\n\nRank 0: rows 0–24309      (177,613 nonzeros)\nRank 1: rows 24310–48619  (172,145 nonzeros)\nRank 2: rows 48620–72929  ( 77,087 nonzeros)\nRank 3: rows 72930–97239  ( 82,233 nonzeros)\n\nPETSc+MPI distributed runtime: 0.088 s\n&lt;sz&gt; at t_end: 1.000000\nTotal nonzeros across all ranks: 509,078 in a 97,240×97,240 matrix. That is a fill fraction of 0.0054% — the matrix is extremely sparse.\nThe dense equivalent would require: \n97{,}240^2 \\times 16 \\text{ bytes} \\approx 151 \\text{ GB}\n which would be impossible to store on a single machine, let alone solve. The sparse distributed approach stores only the 509,078 nonzeros, split evenly across ranks.\n\n\nLoad Balance\nOne thing the output reveals is a load imbalance across ranks:\n\n\n\nRank\nRows\nNonzeros\nAvg nnz/row\n\n\n\n\n0\n24,310\n177,613\n7.3\n\n\n1\n24,310\n172,145\n7.1\n\n\n2\n24,310\n77,087\n3.2\n\n\n3\n24,310\n82,233\n3.4\n\n\n\nRanks 0 and 1 own roughly twice the work of ranks 2 and 3. This is because PETSc assigns rows by contiguous index, and the lower-tier ADOs (small \\sum n_k) are indexed first. Lower-tier ADOs have more neighbours — both upward and downward coupling terms — so their rows are denser. The upper-tier ADOs (high \\sum n_k, near the truncation boundary) have fewer neighbours because some upward couplings are cut off by the depth ceiling.\nThis is a known issue with naive row-based partitioning of hierarchy matrices. A better partitioning would assign rows by tier level to equalise work per rank. That is a future optimisation."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#scaling-why-this-matters",
+    "href": "posts/Week-4/week4.html#scaling-why-this-matters",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Scaling: Why This Matters",
+    "text": "Scaling: Why This Matters\nThe table below shows why distributed assembly is not optional for large depths:\n\n\n\nDepth\nADOs\nDOF\nDense matrix\n\n\n\n\n2\n55\n220\n0.8 MB\n\n\n4\n715\n2,860\n130.9 MB\n\n\n6\n5,005\n20,020\n6.4 GB\n\n\n8\n24,310\n97,240\n151 GB\n\n\n10\n92,378\n369,512\n2.2 TB\n\n\n\n(K=9, n=2, using complex128 = 16 bytes per entry)\nAt depth 6, the dense matrix already exceeds the RAM of a typical workstation. At depth 8, Optimal 2 handled it in 0.088 seconds across 4 ranks using only 509,078 nonzeros. At depth 10, distributed sparse assembly is the only feasible approach — the dense matrix would be 2.2 TB."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#key-insights-from-this-week",
+    "href": "posts/Week-4/week4.html#key-insights-from-this-week",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Key Insights from This Week",
+    "text": "Key Insights from This Week\n1. The coupling-up term does not involve bath coefficients. QuTiP’s _grad_next_bosonic always computes -i(Q\\rho - \\rho Q) regardless of exponent type. The bath coefficients c_k only appear in the coupling-down term. This is a consequence of the HEOM derivation: the upward coupling represents the action of the bath on the system, while the downward coupling represents feedback from the higher-tier ADOs back into the dynamics.\n2. The RHS is block-sparse by construction, not by accident. Each ADO label \\mathbf{n} connects only to \\mathbf{n} \\pm \\mathbf{e}_k for each k. The number of nonzero blocks per row is bounded by 2K (two neighbours per mode), giving an average of roughly 2K \\cdot n^2 nonzeros per ADO block row — independent of the total system size.\n3. Diagonal initial states hide bugs. When \\rho_0 is diagonal (like |0\\rangle\\langle 0|), the commutator [Q, \\rho_0] vanishes for Q = \\sigma_z, making the first timestep of the solution insensitive to errors in the coupling-up term. Always validate with a non-diagonal initial state (e.g. \\rho_0 = |+\\rangle\\langle +|) to catch this class of bug.\n4. PETSc’s ownership range is the natural parallelism primitive. A.getOwnershipRange() returns (rstart, rend) — the global row indices this rank is responsible for. Building only those rows locally and calling A.setValue() is all that is needed. PETSc handles the communication transparently during assembly and matrix-vector products.\n5. Load balance depends on the ADO ordering. The current implementation assigns contiguous rows to each rank. Since lower tiers are denser, this leads to 2× load imbalance between early and late ranks. Tier-aware partitioning (interleaving rows from different tiers) would equalise this at the cost of non-contiguous ownership, which PETSc supports but requires more careful index management."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#complete-runtime-summary",
+    "href": "posts/Week-4/week4.html#complete-runtime-summary",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Complete Runtime Summary",
+    "text": "Complete Runtime Summary\n\n\n\n\n\n\n\n\n\n\n\nTrack\nWho builds R\nSolver\nDepth\nDOF\nRuntime\n\n\n\n\nBaseline\nQuTiP (serial)\nQuTiP/scipy\n2\n220\n0.165 s\n\n\nValidation\nQuTiP (serial)\nSciPy RK45\n2\n220\n0.087 s\n\n\nBrute-force\nQuTiP (serial)\nPETSc TS, 1 rank\n2\n220\n0.019 s\n\n\nOptimal 1\nDict (serial)\nPETSc TS, 4 ranks\n2\n220\n0.003 s\n\n\nOptimal 2\nPETSc+MPI (distributed)\nPETSc TS, 4 ranks\n8\n97,240\n0.088 s\n\n\n\nThe depth-8 result (Optimal 2) is the headline number: a 97,240-dimensional sparse ODE solved in 88 milliseconds on 4 cores, using a matrix that would require 151 GB in dense form. The matrix was assembled in a distributed fashion from scratch, bypassing QuTiP entirely."
+  },
+  {
+    "objectID": "posts/Week-4/week4.html#next-steps",
+    "href": "posts/Week-4/week4.html#next-steps",
+    "title": "Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed",
+    "section": "Next Steps",
+    "text": "Next Steps\nThe immediate priorities for next week are:\n\nFix the coupling-up bug in Optimal 1 — use -i \\cdot \\text{comm}_Q instead of -i(c_k Q_l - c_k^* Q_r), and validate with a non-diagonal initial state.\nImplement tier-aware partitioning — assign rows from each tier to ranks in a round-robin fashion to equalise the nonzero-per-rank distribution.\nScaling benchmarks — run Optimal 2 at depths 4, 6, 8, 10 and plot runtime vs depth and runtime vs number of MPI ranks to quantify strong and weak scaling.\nMonitor function for trajectory — the current PETSc TS setup only returns the final state. Adding a monitor function will allow recording \\langle\\sigma_z\\rangle(t) at each timestep for full trajectory validation.\n\n\nSource files: heom_optimal1.py, heom_optimal2.py*"
   }
 ]
