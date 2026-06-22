@@ -377,4 +377,4 @@ The immediate priorities for next week are:
 
 ---
 
-*Source files: [heom_optimal1.py](https://github.com/Chinmay-Tangal/gsoc-blog/blob/main/posts/Week-4/heom_optimal1.py)*, [heom_optimal2.py](https://github.com/Chinmay-Tangal/gsoc-blog/blob/main/posts/Week-4/heom_optimal2.py)*
+*Source files: [heom_optimal1.py](https://github.com/Chinmay-Tangal/gsoc-blog/blob/main/posts/Week-4/heom_optimal1.py), [heom_optimal2.py](https://github.com/Chinmay-Tangal/gsoc-blog/blob/main/posts/Week-4/heom_optimal2.py)
