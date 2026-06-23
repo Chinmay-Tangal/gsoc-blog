@@ -186,6 +186,4 @@ if rank == 0:
 
     plt.tight_layout()
     plt.savefig("optimal1_validation.png", dpi=150, bbox_inches="tight")
-    
-    # We comment this out so it doesn't freeze the terminal waiting for you to close the window
-    # plt.show()
+    plt.show()
