@@ -6,8 +6,10 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
+<meta name="author" content="Chinmay Tangal">
+<meta name="dcterms.date" content="2026-06-29">
 
-<title>blog – Google Summer of Code 2026 | QuTiP | NumFOCUS</title>
+<title>Week 5: Natively Integrating PETSc into QuTiP’s HEOM Solver – Google Summer of Code 2026 | QuTiP | NumFOCUS</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,28 +25,61 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
-<script src="site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="site_libs/quarto-nav/headroom.min.js"></script>
-<script src="site_libs/clipboard/clipboard.min.js"></script>
-<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
-<script src="site_libs/quarto-search/fuse.min.js"></script>
-<script src="site_libs/quarto-search/quarto-search.js"></script>
-<meta name="quarto:offset" content="./">
-<script src="site_libs/quarto-listing/list.min.js"></script>
-<script src="site_libs/quarto-listing/quarto-listing.js"></script>
-<script src="site_libs/quarto-html/quarto.js" type="module"></script>
-<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="site_libs/quarto-html/popper.min.js"></script>
-<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
-<script src="site_libs/quarto-html/anchor.min.js"></script>
-<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
-<script src="site_libs/bootstrap/bootstrap.min.js"></script>
-<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-32a889d5c8f61d3f0f5c05f30bc27df8.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<script src="../../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap-32a889d5c8f61d3f0f5c05f30bc27df8.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -72,35 +107,6 @@ ul.task-list li input[type="checkbox"] {
     "search-label": "Search"
   }
 }</script>
-<script>
-
-  window.document.addEventListener("DOMContentLoaded", function (_event) {
-    const listingTargetEl = window.document.querySelector('#listing-listing .list');
-    if (!listingTargetEl) {
-      // No listing discovered, do not attach.
-      return; 
-    }
-
-    const options = {
-      valueNames: ['listing-date','listing-title','listing-author','listing-description','listing-categories',{ data: ['index'] },{ data: ['categories'] },{ data: ['listing-date-sort'] },{ data: ['listing-file-modified-sort'] }],
-      
-      searchColumns: ["listing-date","listing-title","listing-author","listing-image","listing-description"],
-    };
-
-    window['quarto-listings'] = window['quarto-listings'] || {};
-    window['quarto-listings']['listing-listing'] = new List('listing-listing', options);
-
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  });
-
-  window.addEventListener('hashchange',() => {
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  })
-  </script>
 
   <script>window.backupDefine = window.define; window.define = undefined;</script><script src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
   <script>document.addEventListener("DOMContentLoaded", function () {
@@ -146,17 +152,17 @@ window.Quarto = {
 };
 </script>
 
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="../../styles.css">
 </head>
 
 <body class="nav-fixed quarto-light">
 
 <div id="quarto-search-results"></div>
-  <header id="quarto-header" class="headroom fixed-top quarto-banner">
+  <header id="quarto-header" class="headroom fixed-top">
     <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
-    <a class="navbar-brand" href="./index.html">
+    <a class="navbar-brand" href="../../index.html">
     <span class="navbar-title">Google Summer of Code 2026 | QuTiP | NumFOCUS</span>
     </a>
   </div>
@@ -167,19 +173,19 @@ window.Quarto = {
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
-    <a class="nav-link" href="./index.html"> 
+    <a class="nav-link" href="../../index.html"> 
 <span class="menu-text">Home</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link active" href="./blog.html" aria-current="page"> 
+    <a class="nav-link" href="../../blog.html"> 
 <span class="menu-text">Blog</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./project.html"> 
+    <a class="nav-link" href="../../project.html"> 
 <span class="menu-text">Project</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="./about.html"> 
+    <a class="nav-link" href="../../about.html"> 
 <span class="menu-text">About</span></a>
   </li>  
 </ul>
@@ -207,7 +213,7 @@ window.Quarto = {
     </nav>
 </header>
 <!-- content -->
-<header id="title-block-header" class="quarto-title-block"></header><div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
 <!-- sidebar -->
 <!-- margin-sidebar -->
     <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
@@ -215,267 +221,136 @@ window.Quarto = {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#blogs" id="toc-blogs" class="nav-link active" data-scroll-target="#blogs">Blogs</a></li>
+  <li><a href="#the-goal-native-qutip-integration" id="toc-the-goal-native-qutip-integration" class="nav-link active" data-scroll-target="#the-goal-native-qutip-integration">The Goal: Native QuTiP Integration</a></li>
+  <li><a href="#the-distributed-assembler-petscgatherheomrhs" id="toc-the-distributed-assembler-petscgatherheomrhs" class="nav-link" data-scroll-target="#the-distributed-assembler-petscgatherheomrhs">1. The Distributed Assembler: <code>PETScGatherHEOMRHS</code></a></li>
+  <li><a href="#a-native-petsc-integrator" id="toc-a-native-petsc-integrator" class="nav-link" data-scroll-target="#a-native-petsc-integrator">2. A Native PETSc Integrator</a>
+  <ul class="collapse">
+  <li><a href="#handling-stiff-odes-with-bdf" id="toc-handling-stiff-odes-with-bdf" class="nav-link" data-scroll-target="#handling-stiff-odes-with-bdf">Handling Stiff ODEs with BDF</a></li>
+  <li><a href="#the-scatter-context-efficient-memory-retrieval" id="toc-the-scatter-context-efficient-memory-retrieval" class="nav-link" data-scroll-target="#the-scatter-context-efficient-memory-retrieval">The Scatter Context: Efficient Memory Retrieval</a></li>
+  </ul></li>
+  <li><a href="#parallel-steady-state-solver" id="toc-parallel-steady-state-solver" class="nav-link" data-scroll-target="#parallel-steady-state-solver">3. Parallel Steady State Solver</a></li>
+  <li><a href="#conclusion-and-next-steps" id="toc-conclusion-and-next-steps" class="nav-link" data-scroll-target="#conclusion-and-next-steps">Conclusion and Next Steps</a>
+  <ul class="collapse">
+  <li><a href="#next-up" id="toc-next-up" class="nav-link" data-scroll-target="#next-up">Next up:</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
-<main class="content quarto-banner-title-block" id="quarto-document-content">
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Week 5: Natively Integrating PETSc into QuTiP’s HEOM Solver</h1>
+  <div class="quarto-categories">
+    <div class="quarto-category">GSoC 2026</div>
+    <div class="quarto-category">Week 5</div>
+    <div class="quarto-category">QuTiP</div>
+    <div class="quarto-category">HEOM</div>
+    <div class="quarto-category">PETSc</div>
+    <div class="quarto-category">MPI</div>
+    <div class="quarto-category">Steady State</div>
+  </div>
+  </div>
 
 
 
+<div class="quarto-title-meta">
 
-<section id="blogs" class="level2">
-<h2 class="anchored" data-anchor-id="blogs">Blogs</h2>
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Chinmay Tangal </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">June 29, 2026</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
 
+
+</header>
+
+
+<p>Week 5 marked a major milestone: transitioning our successful standalone distributed assembly scripts into a native backend within the QuTiP codebase itself. Until now, we proved that PETSc and MPI could drastically accelerate the Hierarchical Equations of Motion (HEOM) and bypass the memory bottlenecks of large matrices. This week, we wired those concepts directly into QuTiP’s internal API.</p>
+<p>We successfully introduced <code>backend="petsc"</code> for the <code>HEOMSolver</code>, created a custom <code>IntegratorPETSc</code> class, and implemented a highly efficient parallel <code>steady_state</code> solver.</p>
+<section id="the-goal-native-qutip-integration" class="level2">
+<h2 class="anchored" data-anchor-id="the-goal-native-qutip-integration">The Goal: Native QuTiP Integration</h2>
+<p>Previously, our “Optimal 2” script assembled the PETSc matrix and solved it externally. To make this useful for the QuTiP community, a user should only have to change one line of code to unlock supercomputer-level scaling:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The target user experience</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>solver <span class="op">=</span> HEOMSolver(H, bath, max_depth, options<span class="op">=</span>{<span class="st">"backend"</span>: <span class="st">"petsc"</span>})</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> solver.run(rho0, tlist)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>To achieve this, we had to intercept three major phases of QuTiP’s traditional workflow: 1. <strong>Right-Hand Side (RHS) Construction:</strong> Bypassing <code>scipy.sparse</code> and <code>QobjEvo</code>. 2. <strong>Time Evolution:</strong> Wiring PETSc’s Time Stepper (<code>TS</code>) into QuTiP’s <code>Integrator</code> base class. 3. <strong>Steady State Calculation:</strong> Replacing the standard LU decomposition with a parallel Krylov subspace solver (<code>KSP</code>).</p>
+</section>
+<section id="the-distributed-assembler-petscgatherheomrhs" class="level2">
+<h2 class="anchored" data-anchor-id="the-distributed-assembler-petscgatherheomrhs">1. The Distributed Assembler: <code>PETScGatherHEOMRHS</code></h2>
+<p>In <code>qutip/solver/heom/backend_petsc.py</code>, we created the <code>PETScGatherHEOMRHS</code> class. This replaces QuTiP’s traditional <code>_GatherHEOMRHS</code> when the PETSc backend is selected.</p>
+<p>Instead of caching matrix elements in standard Python lists to build a CSR matrix, this class instantiates a <code>PETSc.Mat.Type.MPIAIJ</code> distributed matrix right from the start.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># From backend_petsc.py</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="va">self</span>.mat <span class="op">=</span> PETSc.Mat().create(comm)</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="va">self</span>.mat.setSizes(((local_size, global_size), (local_size, global_size)))</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="va">self</span>.mat.setType(PETSc.Mat.Type.MPIAIJ)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Inside <code>bofin_solvers.py</code>, we intercepted the <code>_rhs()</code> loop. Using <code>PETSc.COMM_WORLD</code>, we calculate exactly which chunk of the ADO labels the current MPI rank owns. Each rank only iterates over its <code>local_labels</code> to calculate gradients (<code>_grad_n</code>, <code>_grad_next</code>, <code>_grad_prev</code>) and injects them directly into the distributed matrix via <code>PETSc.InsertMode.ADD_VALUES</code>.</p>
+<p>Because PETSc automatically caches and routes off-diagonal cross-node connections during <code>assemblyBegin()</code>, the global matrix never exists on any single machine.</p>
+</section>
+<section id="a-native-petsc-integrator" class="level2">
+<h2 class="anchored" data-anchor-id="a-native-petsc-integrator">2. A Native PETSc Integrator</h2>
+<p>QuTiP relies on an <code>Integrator</code> hierarchy to step through time. To use PETSc’s advanced ODE solvers, we created <code>IntegratorPETSc</code> in <code>qutip/solver/integrator/petsc_integrator.py</code>.</p>
+<section id="handling-stiff-odes-with-bdf" class="level3">
+<h3 class="anchored" data-anchor-id="handling-stiff-odes-with-bdf">Handling Stiff ODEs with BDF</h3>
+<p>The HEOM equations are notoriously stiff due to drastically different decay rates among the Auxiliary Density Operators (ADOs). Standard explicit solvers take painfully small steps to maintain stability.</p>
+<p>In <code>IntegratorPETSc</code>, we configured PETSc’s <code>TS</code> (Time Stepper) to use <code>bdf</code> (Backward Differentiation Formula), which implicitly solves the stiff system, allowing for significantly larger, stable time steps.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="va">self</span>.ts.setType(<span class="va">self</span>.options.get(<span class="st">"ts_type"</span>, <span class="st">"bdf"</span>))</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Internal linear solver (KSP) configuration</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>ksp <span class="op">=</span> <span class="va">self</span>.ts.getSNES().getKSP()</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>ksp.setType(<span class="st">"bcgs"</span>)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>ksp.getPC().setType(<span class="st">"jacobi"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="the-scatter-context-efficient-memory-retrieval" class="level3">
+<h3 class="anchored" data-anchor-id="the-scatter-context-efficient-memory-retrieval">The Scatter Context: Efficient Memory Retrieval</h3>
+<p>During time evolution, QuTiP expects a dense state vector to calculate expectation values at each <code>tlist</code> step. However, our state vector is distributed across the MPI cluster.</p>
+<p>If the user only cares about the physical system density matrix (and not the thousands of ADOs), pulling the entire hierarchy back to Rank 0 is a massive waste of network bandwidth. We implemented a custom <code>PETSc.Scatter</code> context: if <code>store_ados</code> is false, it selectively scatters only the first <span class="math inline">N^2</span> elements (the physical density matrix) back to a sequential vector for QuTiP to process.</p>
+</section>
+</section>
+<section id="parallel-steady-state-solver" class="level2">
+<h2 class="anchored" data-anchor-id="parallel-steady-state-solver">3. Parallel Steady State Solver</h2>
+<p>Solving for the steady state (<span class="math inline">d\rho/dt = 0</span>) requires finding the null space of the Liouvillian, <span class="math inline">L \rho = 0</span>. Because the Liouvillian is a singular matrix, we must enforce the trace-preserving condition (<span class="math inline">Tr(\rho) = 1</span>) to find a unique, physical solution.</p>
+<p>Traditionally, QuTiP modifies the first row of the dense/sparse matrix. Modifying a distributed matrix requires careful MPI ownership handling.</p>
+<p>In the <code>steady_state</code> method of <code>HEOMSolver</code>, we elegantly enforce this condition on the parallel matrix:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Zero out the 0th global row across the cluster</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>mat.zeroRows([<span class="dv">0</span>], diag<span class="op">=</span><span class="fl">0.0</span>)</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co"># If this specific MPI rank owns the 0th row, inject the trace condition</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>rstart, rend <span class="op">=</span> mat.getOwnershipRange()</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> rstart <span class="op">&lt;=</span> <span class="dv">0</span> <span class="op">&lt;</span> rend:</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    cols <span class="op">=</span> [num <span class="op">*</span> (n <span class="op">+</span> <span class="dv">1</span>) <span class="cf">for</span> num <span class="kw">in</span> <span class="bu">range</span>(n)]</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    vals <span class="op">=</span> [<span class="fl">1.0</span>] <span class="op">*</span> n</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    mat.setValues([<span class="dv">0</span>], cols, vals, addv<span class="op">=</span>PETSc.InsertMode.INSERT_VALUES)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>We then solve the system using PETSc’s parallel Krylov solver (<code>KSP</code>) with the <code>bcgs</code> algorithm and <code>bjacobi</code> preconditioning. This allows us to find the steady state of massive HEOM systems that would otherwise cause memory exhaustion on a single machine.</p>
+</section>
+<section id="conclusion-and-next-steps" class="level2">
+<h2 class="anchored" data-anchor-id="conclusion-and-next-steps">Conclusion and Next Steps</h2>
+<p>This week brought the power of MPI and PETSc out of isolated scripts and securely into QuTiP’s internal architecture. Users can now build the RHS dynamically across a cluster, integrate stiff equations implicitly, and solve for steady states without ever assembling a global matrix in local RAM.</p>
+<section id="next-up" class="level3">
+<h3 class="anchored" data-anchor-id="next-up">Next up:</h3>
+<ol type="1">
+<li><strong>Graph Partitioning / Load Balancing:</strong> Currently, ADOs are distributed sequentially, leading to load imbalances because lower-tier ADOs are denser than higher-tier ones. We will investigate tier-aware matrix reordering to optimize MPI communication and ensure perfect strong scaling beyond 4 ranks.</li>
+<li><strong>Time-Dependent Hamiltonians:</strong> Extending the PETSc backend to support non-constant system Liouvillians smoothly over time.</li>
+<li><strong>Comprehensive Benchmarking:</strong> Running standard HEOM benchmarks natively through the QuTiP API to finalize performance validation.</li>
+</ol>
 
 
 </section>
+</section>
 
-<div class="quarto-listing quarto-listing-container-default" id="listing-listing">
-<div class="list quarto-listing-default">
-<div class="quarto-post image-right" data-index="0" data-categories="R1NvQyUyMDIwMjYlMkNXZWVrJTIwNSUyQ1F1VGlQJTJDSEVPTSUyQ1BFVFNjJTJDTVBJJTJDU3RlYWR5JTIwU3RhdGU=" data-listing-date-sort="1782671400000" data-listing-file-modified-sort="1782746278647" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="4" data-listing-word-count-sort="776">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Week-5/week5.html" class="no-external">Week 5: Natively Integrating PETSc into QuTiP’s HEOM Solver</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('V2VlayUyMDU='); return false;">Week 5</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('SEVPTQ=='); return false;">HEOM</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UEVUU2M='); return false;">PETSc</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('TVBJ'); return false;">MPI</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('U3RlYWR5JTIwU3RhdGU='); return false;">Steady State</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Week-5/week5.html" class="no-external">
-Week 5 marked a major milestone: transitioning our successful standalone distributed assembly scripts into a native backend within the QuTiP codebase itself. Until now, we…
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Week-5/week5.html" class="no-external">
-<div class="listing-date">
-Jun 29, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="1" data-categories="R1NvQyUyMDIwMjYlMkNXZWVrJTIwNCUyQ1F1VGlQJTJDSEVPTSUyQ1BFVFNjJTJDTVBJJTJDT0RF" data-listing-date-sort="1782066600000" data-listing-file-modified-sort="1782135386795" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="12" data-listing-word-count-sort="2370">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Week-4/week4.html" class="no-external">Week 4: Building the HEOM RHS from Scratch and Going Fully Distributed</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('V2VlayUyMDQ='); return false;">Week 4</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('SEVPTQ=='); return false;">HEOM</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UEVUU2M='); return false;">PETSc</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('TVBJ'); return false;">MPI</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('T0RF'); return false;">ODE</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Week-4/week4.html" class="no-external">
-Week 4 was the most technically involved week so far. The goal shifted from <em>using</em> QuTiP’s HEOM solver to <em>understanding it well enough to replace its internals</em> — rebuilding…
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Week-4/week4.html" class="no-external">
-<div class="listing-date">
-Jun 22, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="2" data-categories="R1NvQyUyMDIwMjYlMkNXZWVrJTIwMyUyQ1F1VGlQJTJDSEVPTSUyQ1BFVFNjJTJDT0RF" data-listing-date-sort="1781461800000" data-listing-file-modified-sort="1781536954117" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="4" data-listing-word-count-sort="784">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Week-3/week3.html" class="no-external">Week 3: Extracting the RHS Matrix and Building the PETSc Bridge</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('V2VlayUyMDM='); return false;">Week 3</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('SEVPTQ=='); return false;">HEOM</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UEVUU2M='); return false;">PETSc</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('T0RF'); return false;">ODE</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Week-3/week3.html" class="no-external">
-Week 3 was focused on understanding how the QuTiP HEOM solver actually integrates the equations of motion, and building a path to replace that integration with PETSc.
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Week-3/week3.html" class="no-external">
-<div class="listing-date">
-Jun 15, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="3" data-categories="R1NvQyUyMDIwMjYlMkNXZWVrJTIwMiUyQ1F1VGlQJTJDSEVPTSUyQ1Byb2ZpbGluZyUyQ1BlcmZvcm1hbmNl" data-listing-date-sort="1780857000000" data-listing-file-modified-sort="1780857692152" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="6" data-listing-word-count-sort="1059">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Week-2/week2.html" class="no-external">Week 2: Profiling the Existing HEOM Solver</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('V2VlayUyMDI='); return false;">Week 2</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('SEVPTQ=='); return false;">HEOM</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UHJvZmlsaW5n'); return false;">Profiling</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UGVyZm9ybWFuY2U='); return false;">Performance</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Week-2/week2.html" class="no-external">
-Coding phase Week 2 was focused on understanding the current HEOM implementation before making any modifications to it.
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Week-2/week2.html" class="no-external">
-<div class="listing-date">
-Jun 8, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="4" data-categories="R1NvQyUyMDIwMjYlMkNXZWVrJTIwMSUyQ1F1VGlQJTJDUEVUU2MlMkNNUEk=" data-listing-date-sort="1780770600000" data-listing-file-modified-sort="1780377146785" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="4" data-listing-word-count-sort="795">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Week-1/week1.html" class="no-external">Week 1: Getting Hands-On with MPI and PETSc</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('V2VlayUyMDE='); return false;">Week 1</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UEVUU2M='); return false;">PETSc</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('TVBJ'); return false;">MPI</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Week-1/week1.html" class="no-external">
-Coding phase has started. Week 1 was less about writing solver code and more about actually getting comfortable with the tools I’ll be using — MPI and PETSc. Worked through…
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Week-1/week1.html" class="no-external">
-<div class="listing-date">
-Jun 7, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="5" data-categories="R1NvQyUyMDIwMjYlMkNDb21tdW5pdHklMjBCb25kaW5nJTJDUXVUaVA=" data-listing-date-sort="1780165800000" data-listing-file-modified-sort="1780375430633" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="2" data-listing-word-count-sort="253">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/Community Bonding/community-bonding.html" class="no-external">Community Bonding Period: Setting the Foundation for Success</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('Q29tbXVuaXR5JTIwQm9uZGluZw=='); return false;">Community Bonding</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UXVUaVA='); return false;">QuTiP</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/Community Bonding/community-bonding.html" class="no-external">
-The community bonding period (May 12 - May 24) is wrapped up. Honestly it went by faster than I expected.
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/Community Bonding/community-bonding.html" class="no-external">
-<div class="listing-date">
-May 31, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-<div class="quarto-post image-right" data-index="6" data-categories="R1NvQyUyMDIwMjYlMkNPcGVuU291cmNlJTJDUHl0aG9uJTJDSFBDJTJDcXVhbnR1bQ==" data-listing-date-sort="1779301800000" data-listing-file-modified-sort="1780374955675" data-listing-date-modified-sort="NaN" data-listing-reading-time-sort="3" data-listing-word-count-sort="450">
-<div class="body">
-<h3 class="no-anchor listing-title">
-<a href="./posts/intro/gsoc-selection.html" class="no-external">Exciting News: I’m Joining Google Summer of Code 2026!</a>
-</h3>
-<div class="listing-categories">
-
-<div class="listing-category" onclick="window.quartoListingCategory('R1NvQyUyMDIwMjY='); return false;">GSoC 2026</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('T3BlblNvdXJjZQ=='); return false;">OpenSource</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('UHl0aG9u'); return false;">Python</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('SFBD'); return false;">HPC</div>
-
-<div class="listing-category" onclick="window.quartoListingCategory('cXVhbnR1bQ=='); return false;">quantum</div>
-
-</div>
-<div class="delink listing-description"><a href="./posts/intro/gsoc-selection.html" class="no-external">
-A few months ago, I put together a GSoC proposal half-convinced it wouldn’t go anywhere. I’d been contributing to QuTiP for a while, understood the codebase well enough to…
-</a></div>
-</div>
-<div class="metadata">
-<a href="./posts/intro/gsoc-selection.html" class="no-external">
-<div class="listing-date">
-May 21, 2026
-</div>
-<div class="listing-author">
-Chinmay Tangal
-</div>
-</a>
-</div>
-</div>
-</div>
-<div class="listing-no-matching d-none">No matching items</div>
-</div></main> <!-- /main -->
+</main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
   window.document.addEventListener("DOMContentLoaded", function (event) {
     const icon = "";

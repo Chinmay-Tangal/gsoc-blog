@@ -1,0 +1,96 @@
+---
+title: "Week 5: Natively Integrating PETSc into QuTiP's HEOM Solver"
+author: "Chinmay Tangal"
+date: "2026-06-29"
+page-layout: article
+categories: [GSoC 2026, Week 5, QuTiP, HEOM, PETSc, MPI, Steady State]
+---
+
+Week 5 marked a major milestone: transitioning our successful standalone distributed assembly scripts into a native backend within the QuTiP codebase itself. Until now, we proved that PETSc and MPI could drastically accelerate the Hierarchical Equations of Motion (HEOM) and bypass the memory bottlenecks of large matrices. This week, we wired those concepts directly into QuTiP's internal API.
+
+We successfully introduced `backend="petsc"` for the `HEOMSolver`, created a custom `IntegratorPETSc` class, and implemented a highly efficient parallel `steady_state` solver.
+
+## The Goal: Native QuTiP Integration
+
+Previously, our "Optimal 2" script assembled the PETSc matrix and solved it externally. To make this useful for the QuTiP community, a user should only have to change one line of code to unlock supercomputer-level scaling:
+
+```python
+# The target user experience
+solver = HEOMSolver(H, bath, max_depth, options={"backend": "petsc"})
+result = solver.run(rho0, tlist)
+```
+
+To achieve this, we had to intercept three major phases of QuTiP's traditional workflow:
+1. **Right-Hand Side (RHS) Construction:** Bypassing `scipy.sparse` and `QobjEvo`.
+2. **Time Evolution:** Wiring PETSc's Time Stepper (`TS`) into QuTiP's `Integrator` base class.
+3. **Steady State Calculation:** Replacing the standard LU decomposition with a parallel Krylov subspace solver (`KSP`).
+
+## 1. The Distributed Assembler: `PETScGatherHEOMRHS`
+
+In `qutip/solver/heom/backend_petsc.py`, we created the `PETScGatherHEOMRHS` class. This replaces QuTiP's traditional `_GatherHEOMRHS` when the PETSc backend is selected. 
+
+Instead of caching matrix elements in standard Python lists to build a CSR matrix, this class instantiates a `PETSc.Mat.Type.MPIAIJ` distributed matrix right from the start.
+
+```python
+# From backend_petsc.py
+self.mat = PETSc.Mat().create(comm)
+self.mat.setSizes(((local_size, global_size), (local_size, global_size)))
+self.mat.setType(PETSc.Mat.Type.MPIAIJ)
+```
+
+Inside `bofin_solvers.py`, we intercepted the `_rhs()` loop. Using `PETSc.COMM_WORLD`, we calculate exactly which chunk of the ADO labels the current MPI rank owns. Each rank only iterates over its `local_labels` to calculate gradients (`_grad_n`, `_grad_next`, `_grad_prev`) and injects them directly into the distributed matrix via `PETSc.InsertMode.ADD_VALUES`. 
+
+Because PETSc automatically caches and routes off-diagonal cross-node connections during `assemblyBegin()`, the global matrix never exists on any single machine.
+
+## 2. A Native PETSc Integrator
+
+QuTiP relies on an `Integrator` hierarchy to step through time. To use PETSc's advanced ODE solvers, we created `IntegratorPETSc` in `qutip/solver/integrator/petsc_integrator.py`.
+
+### Handling Stiff ODEs with BDF
+The HEOM equations are notoriously stiff due to drastically different decay rates among the Auxiliary Density Operators (ADOs). Standard explicit solvers take painfully small steps to maintain stability. 
+
+In `IntegratorPETSc`, we configured PETSc's `TS` (Time Stepper) to use `bdf` (Backward Differentiation Formula), which implicitly solves the stiff system, allowing for significantly larger, stable time steps.
+
+```python
+self.ts.setType(self.options.get("ts_type", "bdf"))
+# Internal linear solver (KSP) configuration
+ksp = self.ts.getSNES().getKSP()
+ksp.setType("bcgs")
+ksp.getPC().setType("jacobi")
+```
+
+### The Scatter Context: Efficient Memory Retrieval
+During time evolution, QuTiP expects a dense state vector to calculate expectation values at each `tlist` step. However, our state vector is distributed across the MPI cluster.
+
+If the user only cares about the physical system density matrix (and not the thousands of ADOs), pulling the entire hierarchy back to Rank 0 is a massive waste of network bandwidth. We implemented a custom `PETSc.Scatter` context: if `store_ados` is false, it selectively scatters only the first $N^2$ elements (the physical density matrix) back to a sequential vector for QuTiP to process.
+
+## 3. Parallel Steady State Solver
+
+Solving for the steady state ($d\rho/dt = 0$) requires finding the null space of the Liouvillian, $L \rho = 0$. Because the Liouvillian is a singular matrix, we must enforce the trace-preserving condition ($Tr(\rho) = 1$) to find a unique, physical solution.
+
+Traditionally, QuTiP modifies the first row of the dense/sparse matrix. Modifying a distributed matrix requires careful MPI ownership handling.
+
+In the `steady_state` method of `HEOMSolver`, we elegantly enforce this condition on the parallel matrix:
+
+```python
+# Zero out the 0th global row across the cluster
+mat.zeroRows([0], diag=0.0)
+
+# If this specific MPI rank owns the 0th row, inject the trace condition
+rstart, rend = mat.getOwnershipRange()
+if rstart <= 0 < rend:
+    cols = [num * (n + 1) for num in range(n)]
+    vals = [1.0] * n
+    mat.setValues([0], cols, vals, addv=PETSc.InsertMode.INSERT_VALUES)
+```
+
+We then solve the system using PETSc's parallel Krylov solver (`KSP`) with the `bcgs` algorithm and `bjacobi` preconditioning. This allows us to find the steady state of massive HEOM systems that would otherwise cause memory exhaustion on a single machine.
+
+## Conclusion and Next Steps
+
+This week brought the power of MPI and PETSc out of isolated scripts and securely into QuTiP's internal architecture. Users can now build the RHS dynamically across a cluster, integrate stiff equations implicitly, and solve for steady states without ever assembling a global matrix in local RAM.
+
+### Next up:
+1. **Graph Partitioning / Load Balancing:** Currently, ADOs are distributed sequentially, leading to load imbalances because lower-tier ADOs are denser than higher-tier ones. We will investigate tier-aware matrix reordering to optimize MPI communication and ensure perfect strong scaling beyond 4 ranks.
+2. **Time-Dependent Hamiltonians:** Extending the PETSc backend to support non-constant system Liouvillians smoothly over time.
+3. **Comprehensive Benchmarking:** Running standard HEOM benchmarks natively through the QuTiP API to finalize performance validation.
